@@ -1,0 +1,33 @@
+# PostgreSQL source template for Spine.
+#
+# Usage:
+#   1. Copy into your local tree, e.g. `cp config/examples/postgres.example.yml config/sources/my_pg_source.yml`
+#   2. Set PG_HOST, PG_USER, PG_PASSWORD, PG_DATABASE (e.g. in the repo-root `.env` or the process environment).
+#   3. Rename `resources` keys and adjust `database_schema` / `database_table` to match your tables.
+#   4. Set `enabled: true` on the source (and resources) when you are ready to run.
+#
+# SAP HANA uses the same layout with `type: hana`; you need the HANA driver in your runtime image.
+enabled: false
+type: postgresql
+host: ${PG_HOST:-localhost}
+port: 5432
+username: ${PG_USER}
+password: ${PG_PASSWORD}
+database: ${PG_DATABASE}
+# Optional driver extras (SSL, timeouts, etc.) — see SQLAlchemy / driver docs.
+connection_params: {}
+
+resources:
+  users:
+    method: GET
+    database_schema: public
+    database_table: users
+    # Optional: read via custom SQL instead of a full-table scan (schema/table still used for metadata/logging).
+    # database_select_query: "SELECT id, name FROM public.users WHERE active = true"
+    fields:
+      - name: id
+        source: id
+      - name: name
+        source: name
+    # Omit per-resource loading to use the defaults from `config/defaults.yml` (bucket, format, prefix, etc.).
+    loading: null

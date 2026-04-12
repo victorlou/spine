@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  framework:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./config:/app/config:ro

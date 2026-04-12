@@ -1,0 +1,1208 @@
+"""
+Configuration models for data pipeline.
+Uses Pydantic for validation and type safety.
+"""
+
+import ast
+import json
+from enum import Enum, StrEnum
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
+from src.utils.dynamic_values import (
+    ComplexDynamicValue,
+    DynamicOrStaticValue,
+    DynamicValueType,
+    get_resolver,
+)
+from src.utils.dynamic_values import (
+    SourceConfig as DynamicValueSourceConfig,
+)
+from src.utils.redis_context import RedisContextManager
+
+QUERIES_DIR: str = "queries"
+
+
+class RetryConfig(BaseModel):
+    """Retry configuration settings."""
+
+    max_attempts: int = Field(default=3, ge=1)
+    initial_delay: float = Field(default=1.0, gt=0)
+    backoff_factor: float = Field(default=2.0, gt=1)
+
+
+class LoadingConfig(BaseModel):
+    """
+    Data loading configuration.
+    For S3 destinations, prefix must be specified and should follow the pattern:
+    'source_name/resource_name' (e.g., 'my_source/users').
+    The actual data will be stored in a 'data' subdirectory under this prefix.
+
+    Save modes for Delta format:
+    - **overwrite** (default): Replace all existing data in the table
+    - **append**: Add new data without removing existing data
+    - **merge**: Update existing rows and insert new ones based on primary keys (upsert).
+      Requires merge_keys to be specified.
+
+    Schema evolution is automatically enabled for all modes, allowing new columns
+    to be added to existing tables.
+    """
+
+    destination: str
+    format: str = "delta"
+    write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
+    compression: Optional[str] = "snappy"
+    bucket: Optional[str] = None  # For S3, can be inherited from defaults
+    prefix: Optional[str] = None  # For S3, required if destination is 's3'
+    merge_keys: Optional[List[str]] = Field(
+        default=None,
+        description="List of column names to use as primary keys for merge operations. Required when write_mode is 'merge'.",
+    )
+    force_nondeterministic_deduplication: bool = Field(
+        default=False,
+        description="Enable deduplication during merge operations using merge_keys as the matching criteria. When True, duplicate records matching the merge key are deduplicated with non-deterministic row selection. When False, all records are preserved without deduplication.",
+    )
+
+    @field_validator("prefix")
+    @classmethod
+    def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
+        """Validate prefix format for S3 destinations."""
+        # Only validate if this is an S3 destination
+        if info.data.get("destination") == "s3":
+            if not v:
+                raise ValueError("prefix is required for S3 destinations")
+
+            # Remove any leading/trailing slashes
+            v = v.strip("/")
+
+            # Check prefix structure (should be at least source/resource)
+            parts = v.split("/")
+            if len(parts) < 2:
+                raise ValueError(
+                    "S3 prefix must follow the pattern 'source_name/resource_name' "
+                    "(e.g., 'my_source/users')"
+                )
+
+            # Ensure 'data' is not included in the prefix
+            if "data" in parts:
+                raise ValueError(
+                    "prefix should not include 'data' directory - it will be automatically appended"
+                )
+
+        return v
+
+    @field_validator("bucket")
+    @classmethod
+    def validate_bucket(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
+        """Validate bucket is present for S3 destinations."""
+        if info.data.get("destination") == "s3":
+            if not v:
+                raise ValueError("bucket is required for S3 destination")
+        return v
+
+    @model_validator(mode="after")
+    def validate_merge_keys(self) -> "LoadingConfig":
+        """
+        Validate that merge_keys is provided when write_mode is 'merge'.
+
+        Returns:
+            LoadingConfig: Validated configuration instance
+
+        Raises:
+            ValueError: If write_mode is 'merge' but merge_keys is not provided or is empty
+        """
+        if self.write_mode == "merge":
+            if not self.merge_keys:
+                raise ValueError(
+                    "merge_keys is required when write_mode is 'merge'. "
+                    "Please provide a list of column names to use as primary keys."
+                )
+            if len(self.merge_keys) == 0:
+                raise ValueError("merge_keys must be a non-empty list when write_mode is 'merge'.")
+        return self
+
+    model_config = {"validate_assignment": True}
+
+
+class SchemaField(BaseModel):
+    """
+    Schema field definition.
+    Specifies mapping between source data fields and output columns.
+    """
+
+    name: str  # Name of the field in the output
+    source: str  # Name of the field in the source data
+
+
+class TransformationType(str, Enum):
+    """Supported transformation types."""
+
+    ADD_COLUMN = "add_column"
+    ADD_COLUMN_FROM_REQUEST = "add_column_from_request"
+
+
+class Transformation(BaseModel):
+    """
+    Data transformation definition.
+
+    Supports two types of transformations:
+    1. add_column: Add a static or dynamic value as a new column
+       Example:
+         type: add_column
+         name: timestamp
+         value: "{{ now_iso() }}"
+
+    2. add_column_from_request: Add values from the request parameters/body
+       Example:
+         type: add_column_from_request
+         name: request_date  # Name of the new column
+         source: start_date  # Key in parameters or request_body to extract
+         location: parameters  # Where to look for the value: 'parameters' or 'request_body'
+         data_type: string  # Optional: how to format the value (string, integer, float, array)
+    """
+
+    type: TransformationType
+    name: str  # Name of the output column
+
+    # For add_column type
+    value: Optional[Any] = None
+
+    # For add_column_from_request type
+    source: Optional[str] = None  # Key to extract from parameters/request_body
+    location: Optional[Literal["parameters", "request_body"]] = None
+    data_type: Optional[Literal["string", "integer", "float", "array"]] = (
+        "string"  # Optional type conversion
+    )
+
+    @field_validator("value")
+    @classmethod
+    def validate_value_for_add_column(cls, v: Optional[Any], info: ValidationInfo) -> Optional[Any]:
+        """Ensure value is provided for add_column type."""
+        if info.data.get("type") == TransformationType.ADD_COLUMN and v is None:
+            raise ValueError("value is required for add_column transformation")
+        return v
+
+    @field_validator("source", "location")
+    @classmethod
+    def validate_request_fields(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
+        """Ensure source and location are provided for add_column_from_request type."""
+        if info.data.get("type") == TransformationType.ADD_COLUMN_FROM_REQUEST:
+            if v is None:
+                field_name = info.field_name
+                raise ValueError(
+                    f"{field_name} is required for add_column_from_request transformation"
+                )
+        return v
+
+    def get_value(self) -> Any:
+        """Get the value for add_column transformations (Jinja or static)."""
+        if self.type != TransformationType.ADD_COLUMN:
+            return None
+        return self.value
+
+
+class PreprocessorType(Enum):
+    CONCAT = "concat"
+
+
+class PreprocessConfig(BaseModel):
+    """
+    Configuration for preprocessing steps on parameter values.
+    """
+
+    type: PreprocessorType
+    prefix: Optional[str] = None
+    separator: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_type_dependencies(self):
+        """Validate dependencies after all fields are set."""
+        if self.type == PreprocessorType.CONCAT and not self.separator:
+            raise ValueError("separator is required when type is 'concat'")
+        return self
+
+
+class SnapshotConfig(BaseModel):
+    """Configuration for snapshot-based polling."""
+
+    max_time: int = Field(
+        default=300, description="Maximum time in seconds to wait for snapshot completion"
+    )
+    interval: int = Field(default=60, description="Initial interval between checks in seconds")
+    backoff_factor: float = Field(
+        default=1.5, description="Multiplier for exponential backoff between retries"
+    )
+    max_interval: int = Field(default=300, description="Maximum interval between checks in seconds")
+    ready_condition: str = Field(
+        description="Python expression to evaluate against response to determine readiness"
+    )
+    error_condition: Optional[str] = Field(
+        default=None, description="Optional expression that indicates a terminal error state"
+    )
+
+    @field_validator("ready_condition", "error_condition")
+    @classmethod
+    def validate_condition(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that conditions are valid Python expressions."""
+        if v is not None:
+            try:
+                ast.parse(v, mode="eval")
+            except SyntaxError as e:
+                raise ValueError(f"Invalid Python expression: {e}") from e
+        return v
+
+
+class PaginationType(str, Enum):
+    """Supported pagination types."""
+
+    PAGE_NUMBER = "page_number"  # Page-based pagination (page=1, page=2, etc.)
+    CURSOR = "cursor"  # Cursor-based pagination (cursor tokens)
+    OFFSET = "offset"  # Offset-based pagination (offset=0, offset=100, etc.)
+    TIME_BASED = "time_based"  # Time-based pagination (since=timestamp, until=timestamp)
+
+
+class PaginationConfig(BaseModel):
+    """Configuration for pagination support."""
+
+    type: PaginationType = Field(
+        default=PaginationType.PAGE_NUMBER, description="Type of pagination strategy to use"
+    )
+    page_info_path: str = Field(
+        description="Path to pagination metadata in response (e.g., 'data.page_info')"
+    )
+    max_pages: Optional[int] = Field(
+        default=None, description="Optional limit on number of pages to fetch"
+    )
+    response_page_field: Optional[str] = Field(
+        default="page",
+        description="Field name in page_info response that contains the current page number (optional - only total_pages is required). Only used for PAGE_NUMBER type.",
+    )
+    response_total_pages_field: str = Field(
+        default="total_page",
+        description="Field name in page_info response that contains the total number of pages. Only used for PAGE_NUMBER type.",
+    )
+    response_page_size_field: Optional[str] = Field(
+        default="page_size",
+        description="Field name in page_info response that contains the page size (optional)",
+    )
+    response_total_records_field: Optional[str] = Field(
+        default="total_number",
+        description="Field name in page_info response that contains the total number of records (optional)",
+    )
+
+
+class BatchSizeMode(str, Enum):
+    """Batch size modes for parameter processing."""
+
+    ALL = "all"  # Process all items in a single batch
+
+
+class RequestFormatType(str, Enum):
+    """Supported request format types."""
+
+    STRING = "string"
+    ARRAY = "array"
+    INTEGER = "integer"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+    JSON_STRING = "json_string"
+
+
+class RequestFormatConfig(BaseModel):
+    """
+    Configuration for request value formatting.
+    Attributes:
+    type: How to format the value(s) in the API request
+        - "string": Convert to string
+        - "array": Ensure value is an array
+        - "integer": Convert to integer
+        - "float": Convert to float
+        - "json_string": Convert arrays or dicts to JSON string
+    preprocess: Optional list of preprocessing steps to apply before formatting
+    """
+
+    type: RequestFormatType
+    preprocess: Optional[List[PreprocessConfig]] = None
+
+
+class InputConfig(BaseModel):
+    """Configuration for a request input (value, format, batching).
+
+    Attributes:
+        value: Static or dynamic value for the input. For batching, provide a list of values.
+                Can be a simple value (str, int, float, bool), a list, a dict, or a dynamic value.
+                Dict values can contain nested fields that are themselves DynamicOrStaticValue types,
+                enabling nested parameter structures with independent value resolution.
+        input_format: How the parameter value should be interpreted
+            - "single": Treat value as a single item
+            - "array": Treat value as a list of items
+        request_format: How to format the value(s) in the API request (can be string or RequestFormatConfig)
+        batch_size: Optional batch size for processing. Static lists are automatically batched.
+        pagination: Optional pagination configuration (typically used for page parameters)
+
+    Note:
+        The parameter type (static vs dynamic) is automatically inferred from the value structure:
+        - If value has source_config or is a ComplexDynamicValue → dynamic
+        - Otherwise → static
+
+    Nested Parameter Support:
+        When a parameter value is a dict (e.g., Paging: {Limit: 1000, PageNo: {value: PAGINATION_TYPE}}),
+        the handler will automatically resolve any nested "value" fields independently before using
+        the parameter in requests. This allows nested dynamic values to be resolved separately from
+        the parent parameter structure, enabling complex parameter configurations.
+    """
+
+    value: DynamicOrStaticValue  # Static or dynamic value
+    input_format: Literal["single", "array"] = "single"  # Format of the input parameter
+    request_format: Union[RequestFormatType, RequestFormatConfig, None] = (
+        None  # for backwards compatibility
+    )
+    batch_size: Optional[Union[int, BatchSizeMode]] = (
+        None  # Batch size for processing. Use BatchSizeMode.ALL to process all items in a single batch.
+    )
+    include_as_field: bool = Field(
+        default=False,
+        description="If true, include this parameter as a field in the output schema (prefixed with '_')",
+    )
+    pagination: Optional["PaginationConfig"] = Field(
+        default=None,
+        description="Pagination configuration for this parameter (typically used for page parameters)",
+    )
+
+    @model_validator(mode="after")
+    def extract_pagination_from_value(self):
+        """Extract pagination config from value if type is PAGINATION."""
+        # If pagination is already set, don't override
+        if self.pagination is not None:
+            return self
+
+        # Check if value is a ComplexDynamicValue with PAGINATION type
+        if (
+            isinstance(self.value, ComplexDynamicValue)
+            and self.value.type == DynamicValueType.PAGINATION
+        ):
+            if self.value.pagination_config:
+                # Convert dict to PaginationConfig
+                self.pagination = PaginationConfig(**self.value.pagination_config)
+
+        return self
+
+    def format_request_value(self, value: Any) -> Any:
+        """
+        Format a value for use in an API request.
+
+        This applies preprocessing steps (if configured) before format conversion.
+        """
+        if value is None:
+            return None
+
+        # Apply preprocessing steps sequentially if configured
+        # Below implementation is for simple types like str, int, float, list
+        # Complex types (dict, etc.) are not processed here
+        # If preprocessing is configured, the perceived value will be a list (regardless of the input type of the value) and after applying preprocessing steps
+        if (
+            self.request_format
+            and isinstance(self.request_format, RequestFormatConfig)
+            and self.request_format.preprocess
+            and isinstance(value, (str, int, float, list))
+        ):
+            processed_value = value if (isinstance(value, list)) else [value]
+
+            for step in self.request_format.preprocess:
+                if step.type == PreprocessorType.CONCAT and step.separator:
+                    # Concatenate list into a single string
+                    processed_value = [step.separator.join(str(v) for v in processed_value)]
+                else:
+                    # Raise error for unsupported preprocessing types
+                    raise ValueError(
+                        f"Unsupported preprocessing type: {step.type}. Supported types are: {', '.join([t.value for t in PreprocessorType])}"
+                    )
+
+            value = processed_value
+
+        # Now apply request_format conversion
+        # Handle how the value could be a list or a single value
+        # Normalize request_format to RequestFormatConfig
+        format_config = self.request_format
+        if isinstance(format_config, str):
+            # Backwards compatibility: convert string to RequestFormatConfig
+            # Cast to the appropriate literal type
+            format_config = RequestFormatConfig(type=format_config)  # type: ignore[arg-type]
+
+        if not format_config:
+            return value
+
+        # Apply format conversion based on type
+        format_type = format_config.type
+
+        if format_type == "string":
+            # If converting array to string, take the first element
+            if isinstance(value, list) and len(value) > 0:
+                return str(value[0])
+            return str(value)
+        elif format_type == "integer":
+            return int(value[0] if isinstance(value, list) else value)
+        elif format_type == "float":
+            return float(value[0] if isinstance(value, list) else value)
+        elif format_type == "boolean":
+            raw = value[0] if isinstance(value, list) else value
+            return bool(raw) if raw is not None else None
+        elif format_type == "array":
+            # Don't wrap if already an array
+            return value if isinstance(value, list) else [value]
+        elif format_type == "json_string":
+            # Convert arrays or dicts to JSON string
+            if isinstance(value, (list, dict)):
+                return json.dumps(value)
+            return str(value)
+
+        return value
+
+    def has_source_config(self) -> bool:
+        """
+        Check if this parameter has a source configuration defined.
+
+        Returns:
+            bool: True if value is a ComplexDynamicValue with SOURCE type and source_config is defined
+        """
+        return isinstance(self.value, ComplexDynamicValue) and (
+            self.value.type == DynamicValueType.SOURCE and self.value.source_config is not None
+        )
+
+    def get_source_config(self) -> Optional[DynamicValueSourceConfig]:
+        """
+        Get the source configuration if this parameter has one defined.
+
+        Returns:
+            Optional[DynamicValueSourceConfig]: Source configuration if value is a ComplexDynamicValue with SOURCE
+        """
+        if isinstance(self.value, ComplexDynamicValue) and (
+            self.value.type == DynamicValueType.SOURCE and self.value.source_config is not None
+        ):
+            return self.value.source_config
+        return None
+
+    def get_databricks_query_refs(self) -> List[str]:
+        """
+        Extract Databricks query refs from parameter value (Jinja strings).
+
+        Returns:
+            List of query_ref strings (e.g. ["uk_aus_nz_store_locations"])
+        """
+        import re
+
+        refs: List[str] = []
+        if isinstance(self.value, str) and "databricks(" in self.value:
+            refs.extend(re.findall(r"databricks\s*\(\s*['\"]([^'\"]+)['\"]", self.value))
+        return refs
+
+    def has_filter_config(self) -> bool:
+        """
+        Check if this parameter has a filter configuration defined.
+
+        Returns:
+            bool: True if value is a ComplexDynamicValue with SOURCE type, source_config is defined,
+                  and filter is configured
+        """
+        if isinstance(self.value, ComplexDynamicValue):
+            return (
+                self.value.type == DynamicValueType.SOURCE
+                and self.value.source_config is not None
+                and self.value.source_config.filter is not None
+            )
+        return False
+
+    def get_filter_config(self) -> Optional[Any]:
+        """
+        Get the filter configuration if this parameter has one defined.
+
+        Returns:
+            Optional[Any]: Filter configuration if value is a ComplexDynamicValue with SOURCE type,
+                          source_config is defined, and filter is configured. None otherwise.
+        """
+        if isinstance(self.value, ComplexDynamicValue):
+            if (
+                self.value.type == DynamicValueType.SOURCE
+                and self.value.source_config is not None
+                and self.value.source_config.filter is not None
+            ):
+                return self.value.source_config.filter
+        return None
+
+    def is_static_list(self) -> bool:
+        """Check if this parameter is a static list (not dynamic)."""
+        return isinstance(self.value, list) and not self.get_source_config()
+
+
+RequestInputLocation = Literal["path", "query", "body"]
+
+
+class RequestInputConfig(InputConfig):
+    """
+    Request input configuration: InputConfig plus location in the HTTP request.
+
+    Used for the unified request_inputs dict. Each input has the same resolution
+    and batching behavior; location determines where the value goes (path, query, or body).
+    If location is omitted, default is query for GET and body for POST (set by ResourceConfig validator).
+    """
+
+    location: Optional[RequestInputLocation] = Field(
+        default=None,
+        description="Where this input is sent: path, query, or body. Default: query (GET) or body (POST).",
+    )
+
+
+class JWTConfig(BaseModel):
+    """JWT-specific configuration."""
+
+    provider: Literal["jwt_bearer", "roundel"] = "jwt_bearer"
+    algorithm: str = "RS256"
+    version: str = "2.0"
+    headers: Dict[str, str] = Field(default_factory=lambda: {"alg": "RS256", "typ": "JWT"})
+    token_exchange: Dict[str, str] = Field(
+        default_factory=lambda: {"grant_type": "password", "scope": "profile email openid"}
+    )
+
+
+class AuthConfig(BaseModel):
+    """Authentication configuration."""
+
+    type: str  # "oauth_jwt", "basic", "api_key", "bearer_token"
+    token_url: Optional[HttpUrl] = (
+        None  # Required for oauth_jwt, optional for bearer_token (auto-refresh)
+    )
+    client_id: Optional[str] = (
+        None  # Required for oauth_jwt, basic, api_key; optional for bearer_token (auto-refresh)
+    )
+    client_secret: Optional[str] = (
+        None  # Required for oauth_jwt, basic; optional for bearer_token (auto-refresh)
+    )
+    issuer: Optional[str] = None  # Required for oauth_jwt
+    private_key: Optional[str] = None  # Base64 encoded private key for oauth_jwt
+    bearer_token: Optional[str] = None  # Required for bearer_token auth
+    refresh_token: Optional[str] = None  # Optional for bearer_token (enables auto-refresh)
+    header_name: str = "Authorization"  # Name of the auth header
+    header_format: str = "Bearer {token}"  # Format string for the auth header value
+    jwt_config: Optional[JWTConfig] = None  # JWT-specific settings, required for oauth_jwt
+
+    @model_validator(mode="after")
+    def validate_auth_config(self) -> "AuthConfig":
+        """Validate authentication configuration based on type."""
+        if self.type == "oauth_jwt":
+            if not self.jwt_config:
+                raise ValueError("jwt_config is required for oauth_jwt authentication")
+
+            if not self.issuer:
+                raise ValueError("issuer is required for oauth_jwt authentication")
+
+            if not self.private_key:
+                raise ValueError("private_key is required for oauth_jwt authentication")
+
+            if not self.token_url:
+                raise ValueError("token_url is required for oauth_jwt authentication")
+
+            # roundel requires client_id/client_secret; jwt_bearer/google do not
+            if self.jwt_config.provider == "roundel":
+                if not self.client_id:
+                    raise ValueError("client_id is required for roundel oauth_jwt authentication")
+                if not self.client_secret:
+                    raise ValueError(
+                        "client_secret is required for roundel oauth_jwt authentication"
+                    )
+
+        elif self.type == "basic":
+            if not self.client_id:
+                raise ValueError("client_id is required for basic authentication")
+            if not self.client_secret:
+                raise ValueError("client_secret is required for basic authentication")
+
+        elif self.type == "api_key":
+            if not self.client_id:
+                raise ValueError("client_id is required for api_key authentication")
+
+        elif self.type == "bearer_token":
+            if not self.bearer_token:
+                raise ValueError("bearer_token is required for bearer_token authentication")
+
+        return self
+
+
+class EnsureParamValuesInOutputConfig(BaseModel):
+    """
+    Configuration to ensure all parameter values are present in the output dataframe.
+
+    When enabled, this ensures that all values from the specified parameter are present
+    in the output dataframe. If the API doesn't return data for a parameter value,
+    a row with null values for all other fields will be added.
+
+    Attributes:
+        enabled: Whether to ensure all parameter values are in the output (default: False)
+        param_name: Name of the parameter to track (e.g., "barcode")
+        output_field: Name of the field in the output dataframe that should match param values (e.g., "barcode_number")
+    """
+
+    enabled: bool = Field(
+        default=False, description="Whether to ensure all parameter values are in the output"
+    )
+    param_name: str = Field(description="Name of the parameter to track")
+    output_field: str = Field(
+        description="Name of the field in the output dataframe that should match param values"
+    )
+
+
+class PythonSDKConfig(BaseModel):
+    """Configuration for Python SDK integration."""
+
+    module: str = Field(description="Python module path (e.g., 'requests')")
+    class_name: str = Field(description="Class name to instantiate (e.g., 'Session')")
+    auth: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Authentication parameters passed to SDK constructor (e.g., email, password)",
+    )
+    init_kwargs: Dict[str, Any] = Field(
+        default_factory=dict, description="Additional keyword arguments for SDK initialization"
+    )
+
+
+class ResourceConfig(BaseModel):
+    """Configuration for a single ingest resource (REST, SDK, or future source types)."""
+
+    enabled: bool = Field(default=True, description="Whether this resource is enabled")
+    path: Optional[str] = None  # Optional for Python SDK resources
+    method: Union[Literal["GET", "POST"], str] = (
+        "GET"  # For REST: "GET"/"POST", for Python SDK: method name
+    )
+    response_type: Literal["json", "csv"] = "json"
+    response_key: Optional[str] = None
+    skip_encoding_params: bool = Field(
+        default=False,
+        description="Whether to skip URL encoding of parameters and directly insert them into the URL",
+    )
+
+    # Headers specific to this resource (overrides source-level headers)
+    headers: Optional[Dict[str, DynamicOrStaticValue]] = None
+
+    # Unified request inputs: path, query, and body. Each has location and same resolution/batching.
+    request_inputs: Dict[str, RequestInputConfig] = Field(
+        default_factory=dict,
+        description="All dynamic request inputs (path, query, body). Location determines where each goes.",
+    )
+
+    # Keys to exclude from the final request body before sending (e.g. backfill-only date fields)
+    exclude_from_request_body: Optional[List[str]] = Field(
+        default=None,
+        description="Request body keys to strip before sending (used for backfill-only fields that drive date generation but shouldn't be sent to the API)",
+    )
+
+    # Fields to extract from response. If not specified, all fields will be extracted.
+    fields: Optional[List[SchemaField]] = Field(
+        default=None,
+        description="Fields to extract from response. If not specified, all fields will be extracted.",
+    )
+    transformations: List[Transformation] = Field(default_factory=list)
+    loading: Optional[LoadingConfig] = Field(
+        default=None,
+        description="Loading configuration. If not specified, data will only be stored in Redis.",
+    )
+
+    # Snapshot configuration for resources that require polling (REST)
+    snapshot: Optional[SnapshotConfig] = None
+
+    # Streaming configuration for memory-efficient processing
+    streaming: Optional["StreamingConfig"] = None
+
+    # Configuration to ensure all parameter values are in output dataframe
+    ensure_param_values_in_output: Optional[EnsureParamValuesInOutputConfig] = Field(
+        default=None,
+        description="Configuration to ensure all parameter values are present in the output dataframe",
+    )
+
+    # Relational database extract target (used when source type is postgresql or hana)
+    database_schema: Optional[str] = Field(
+        default=None,
+        description="Database schema for JDBC/HANA extract (required for database source types on this resource).",
+    )
+    database_table: Optional[str] = Field(
+        default=None,
+        description="Database table or view name for extract (required for database source types on this resource).",
+    )
+    database_select_query: Optional[str] = Field(
+        default=None,
+        description="Optional full SQL query for extract; when set, schema/table may still be used for logging.",
+    )
+
+    def resolve_parameters(
+        self,
+        redis_context: RedisContextManager,
+        params: Optional[Dict[str, Any]] = None,
+        param_dict: Optional[Dict[str, RequestInputConfig]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Resolve and validate parameters based on configuration.
+
+        Extracts and resolves parameters from the provided params dict based on
+        the configuration template in param_dict.
+        - params: Pre-resolved values from handler (resolved request context)
+        - param_dict: Input configs to extract/resolve. If None, uses self.request_inputs
+
+        Returns:
+            Dict[str, Any]: Resolved parameters matching param_dict configuration
+        """
+        resolved = {}
+        params = params or {}
+
+        config_dict = param_dict if param_dict is not None else self.request_inputs
+
+        for input_name, input_config in config_dict.items():
+            if isinstance(input_config, InputConfig):
+                if input_name in params:
+                    resolved[input_name] = input_config.format_request_value(params[input_name])
+                elif input_config.value is not None:
+                    value = get_resolver(redis_context).resolve(input_config.value)
+                    resolved[input_name] = input_config.format_request_value(value)
+            else:
+                if input_name in params:
+                    resolved[input_name] = params[input_name]
+                else:
+                    resolved[input_name] = input_config
+
+        if param_dict is None:
+            for param_name, value in params.items():
+                if param_name not in resolved and not param_name.startswith("_"):
+                    resolved[param_name] = value
+
+        return resolved
+
+    def get_inputs_by_location(
+        self, location: RequestInputLocation
+    ) -> Dict[str, RequestInputConfig]:
+        """Return request_inputs with the given location (path, query, or body)."""
+        return {
+            name: config
+            for name, config in self.request_inputs.items()
+            if config.location == location
+        }
+
+    def get_batch_inputs(self) -> Dict[str, RequestInputConfig]:
+        """
+        Get request inputs that require batching (any location).
+
+        Includes only inputs with batch_size explicitly set. Static list body fields
+        (e.g. dimensions, metrics) are not expanded; they are sent as a single value.
+        """
+        return {
+            name: param
+            for name, param in self.request_inputs.items()
+            if param.batch_size is not None
+        }
+
+    def get_streaming_config(self, defaults: "StreamingConfig") -> "StreamingConfig":
+        """
+        Get streaming config with resource-specific overrides.
+
+        Args:
+            defaults: Default streaming configuration
+
+        Returns:
+            StreamingConfig: Streaming configuration for this resource
+        """
+        if self.streaming:
+            return StreamingConfig(
+                enable_streaming=self.streaming.enable_streaming,
+                mode=self.streaming.mode,
+                flush_threshold=self.streaming.flush_threshold or defaults.flush_threshold,
+                disk_config=self.streaming.disk_config or defaults.disk_config,
+            )
+        return defaults
+
+    @field_validator("request_inputs", mode="before")
+    @classmethod
+    def normalize_request_inputs(cls, v: Any) -> Dict[str, Any]:
+        """
+        Allow shorthand: key: value (scalar or list) is normalized to key: { value: value }.
+        Full config dicts (with value, location, batch_size, etc.) are left as-is.
+        """
+        if not isinstance(v, dict):
+            return v
+        config_like_keys = (
+            "location",
+            "batch_size",
+            "type",
+            "source_config",
+            "request_format",
+            "input_format",
+            "pagination",
+            "value",
+        )
+        out = {}
+        for name, raw in v.items():
+            if not isinstance(raw, dict):
+                out[name] = {"value": raw}
+            elif "value" in raw:
+                out[name] = raw
+            elif any(k in raw for k in config_like_keys):
+                out[name] = raw
+            else:
+                # Dict without "value" and without config keys -> treat whole dict as value
+                out[name] = {"value": raw}
+        return out
+
+    @field_validator("request_inputs")
+    @classmethod
+    def validate_request_inputs(cls, v: Dict[str, Any], info: ValidationInfo) -> Dict[str, Any]:
+        """
+        Validate request_inputs: each entry must be RequestInputConfig with value.
+        Location may be None (defaulted in model_validator).
+        """
+        for name, param in v.items():
+            if not isinstance(param, RequestInputConfig):
+                continue
+            if param.value is None:
+                raise ValueError(f"Request input '{name}' must have 'value' specified")
+            if param.location is not None and param.location not in ("path", "query", "body"):
+                raise ValueError(
+                    f"Request input '{name}' location must be 'path', 'query', or 'body'"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def set_default_request_input_locations(self) -> "ResourceConfig":
+        """Default location: GET -> query, POST -> body."""
+        method = (self.method or "GET").upper()
+        default_loc: RequestInputLocation = "body" if method == "POST" else "query"
+        for _name, config in self.request_inputs.items():
+            if isinstance(config, RequestInputConfig) and config.location is None:
+                object.__setattr__(config, "location", default_loc)
+        return self
+
+    def __init__(self, **data):
+        # Get defaults from parent if available
+        defaults = data.pop("_defaults", None)
+        if defaults and isinstance(defaults, dict):
+            # Deep merge loading config with defaults (only if resource doesn't explicitly set loading to None)
+            if "loading" in defaults:
+                default_loading = defaults["loading"]
+                resource_loading = data.get("loading")
+
+                # If resource explicitly sets loading to None, skip merging (keep it None)
+                # Otherwise, merge with defaults
+                if resource_loading is not None:
+                    # Merge loading configuration (resource_loading may be dict or missing)
+                    if not isinstance(resource_loading, dict):
+                        resource_loading = {}
+                    data["loading"] = {
+                        **default_loading,  # Start with defaults
+                        **resource_loading,  # Override with resource-specific settings
+                    }
+                # If resource_loading is None, leave it as None (explicitly skipped)
+
+        super().__init__(**data)
+
+        # Validate S3 configuration (only if loading is configured)
+        if self.loading and self.loading.destination == "s3" and not self.loading.bucket:
+            raise ValueError(
+                "bucket is required for S3 destination (either in defaults or resource configuration)"
+            )
+
+
+class SourceType(StrEnum):
+    """Built-in pipeline source kinds (YAML `type` field). Extend when adding new service types."""
+
+    REST_API = "rest_api"
+    PYTHON_SDK = "python_sdk"
+    POSTGRESQL = "postgresql"
+    HANA = "hana"
+
+
+class SourceConfig(BaseModel):
+    """Data source configuration."""
+
+    enabled: bool = Field(default=True, description="Whether this source is enabled")
+    type: SourceType
+    base_url: Optional[HttpUrl] = None  # Optional for Python SDK sources
+    sdk: Optional[PythonSDKConfig] = None  # Required for Python SDK sources
+    auth: Optional[AuthConfig] = None
+    headers: Dict[str, DynamicOrStaticValue] = Field(
+        default_factory=lambda: {"Content-Type": "application/json", "Accept": "application/json"}
+    )
+    resources: Dict[str, ResourceConfig]
+
+    # Relational database connection (postgresql / hana)
+    host: Optional[str] = Field(default=None, description="Database host")
+    port: Optional[Union[int, str]] = Field(default=None, description="Database port")
+    username: Optional[str] = Field(default=None, description="Database user")
+    password: Optional[str] = Field(default=None, description="Database password")
+    database: Optional[str] = Field(default=None, description="Database/catalog name")
+    connection_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Extra JDBC properties or URL query parameters (driver-specific).",
+    )
+
+    @staticmethod
+    def _is_database_source(t: SourceType) -> bool:
+        return t in (SourceType.POSTGRESQL, SourceType.HANA)
+
+    @model_validator(mode="after")
+    def validate_source_type(self):
+        """Validate that source type matches required fields."""
+        if self.type == SourceType.REST_API:
+            if not self.base_url:
+                raise ValueError("base_url is required for rest_api source type")
+        elif self.type == SourceType.PYTHON_SDK:
+            if not self.sdk:
+                raise ValueError("sdk configuration is required for python_sdk source type")
+        elif self._is_database_source(self.type):
+            if not self.host:
+                raise ValueError(f"{self.type.value} source requires host")
+            if self.port is None or str(self.port).strip() == "":
+                raise ValueError(f"{self.type.value} source requires port")
+            if not self.username or self.password is None:
+                raise ValueError(f"{self.type.value} source requires username and password")
+            if not self.database:
+                raise ValueError(f"{self.type.value} source requires database")
+            for resource_name, resource in self.resources.items():
+                if not resource.enabled:
+                    continue
+                sch = (resource.database_schema or "").strip()
+                tbl = (resource.database_table or "").strip()
+                if not sch or not tbl:
+                    raise ValueError(
+                        f"{self.type.value} resource '{resource_name}' requires non-empty "
+                        "database_schema and database_table"
+                    )
+        for resource_name, resource in self.resources.items():
+            if resource.snapshot is not None and self.type != SourceType.REST_API:
+                raise ValueError(
+                    "snapshot polling is only supported for rest_api sources "
+                    f"(resource '{resource_name}' has snapshot; source type is {self.type!s})"
+                )
+        return self
+
+    def __init__(self, **data):
+        # Extract defaults before initializing resources
+        defaults = data.get("_defaults")
+
+        # Add defaults to each resource's data
+        if "resources" in data:
+            for _resource_name, resource_data in data["resources"].items():
+                if isinstance(resource_data, dict):
+                    resource_data["_defaults"] = defaults
+
+        super().__init__(**data)
+
+
+class QueriesConfig(BaseModel):
+    """
+    Configuration for predefined queries.
+    SQL files must live under the `queries/` subdirectory of the pipeline config root
+    (the directory that contains `defaults.yml` and `sources/`), with a `.sql` extension.
+    Queries can be referenced in resource parameters.
+    """
+
+    name: str = Field(description="Name of the query")
+    description: Optional[str] = Field(default=None, description="Description of the query")
+    file: str = Field(description="Path to the SQL file containing the query")
+
+
+class ContextType(str, Enum):
+    """Type of context storage."""
+
+    MEMORY = "memory"
+    REDIS = "redis"
+
+
+class RedisConfig(BaseModel):
+    """Redis connection configuration."""
+
+    host: str = Field(default="localhost", description="Redis host")
+    port: int = Field(default=6379, description="Redis port")
+    db: int = Field(default=0, description="Redis database number")
+    password: Optional[str] = Field(default=None, description="Redis password")
+    ssl: bool = Field(default=False, description="Whether to use SSL")
+    socket_timeout: int = Field(default=5, description="Socket timeout in seconds")
+    socket_connect_timeout: int = Field(default=5, description="Socket connect timeout in seconds")
+    retry_on_timeout: bool = Field(default=True, description="Whether to retry on timeout")
+    max_connections: int = Field(default=10, description="Maximum number of connections")
+
+
+class ContextConfig(BaseModel):
+    """Context management configuration."""
+
+    type: ContextType = Field(
+        default=ContextType.MEMORY, description="Type of context storage to use"
+    )
+    ttl: int = Field(default=3600, description="Default TTL for context data in seconds")
+    prefix: str = Field(default="pipeline:", description="Prefix for context keys")
+    redis: Optional[RedisConfig] = Field(
+        default=None, description="Redis configuration if using Redis context"
+    )
+
+    @field_validator("redis")
+    @classmethod
+    def validate_redis_config(
+        cls, v: Optional[RedisConfig], info: ValidationInfo
+    ) -> Optional[RedisConfig]:
+        """Validate Redis configuration is present when using Redis context."""
+        if info.data.get("type") == ContextType.REDIS and v is None:
+            raise ValueError("Redis configuration required when using Redis context")
+        return v
+
+
+class DiskConfig(BaseModel):
+    """Disk configuration for temporary storage."""
+
+    path: str = Field(
+        default="../.tmp/disk_streaming",
+        description="Directory for temp files; relative paths resolve from the pipeline config dir (e.g. config/).",
+    )
+    file_size_threshold: int = Field(
+        default=100 * 1024 * 1024,  # 100 MB
+        description="File size threshold in bytes before flushing to disk",
+    )
+
+
+class StreamingConfig(BaseModel):
+    """Streaming configuration for memory-efficient processing."""
+
+    enable_streaming: bool = Field(
+        default=True, description="Enable memory-efficient streaming for all resources"
+    )
+    mode: Literal["redis", "disk"] = Field(
+        default="disk",
+        description="Streaming mode: 'redis' for Redis-based streaming or 'disk' for disk-based streaming (more memory-efficient)",
+    )
+    flush_threshold: int = Field(
+        default=20,
+        description="Flush to Redis every N requests (adjust based on memory constraints)",
+    )
+    disk_config: DiskConfig = Field(
+        default_factory=DiskConfig, description="Disk configuration for temporary storage"
+    )
+
+
+class DefaultsConfig(BaseModel):
+    """Default configuration values."""
+
+    retry: RetryConfig = Field(
+        default_factory=RetryConfig, description="Default retry configuration"
+    )
+    loading: LoadingConfig = Field(
+        default_factory=lambda: LoadingConfig(
+            destination="s3", format="parquet", compression="snappy"
+        ),
+        description="Default loading configuration",
+    )
+    context: ContextConfig = Field(
+        default_factory=ContextConfig, description="Context management configuration"
+    )
+    streaming: StreamingConfig = Field(
+        default_factory=StreamingConfig,
+        description="Streaming configuration for memory-efficient processing",
+    )
+
+
+class PipelineConfig(BaseModel):
+    """Top-level pipeline configuration."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    config_root: Path = Field(
+        exclude=True,
+        description="Directory with defaults.yml, sources/, and queries/ (set by ConfigLoader)",
+    )
+    version: str
+    defaults: DefaultsConfig
+    queries: List[QueriesConfig]
+    sources: Dict[str, SourceConfig]
+
+    def __init__(self, **data):
+        """Initialize pipeline configuration with proper defaults inheritance."""
+        # Inject defaults into each source
+        if "sources" in data and "defaults" in data:
+            defaults_dict = data["defaults"]
+            if isinstance(defaults_dict, DefaultsConfig):
+                defaults_dict = defaults_dict.model_dump()
+
+            for _source_name, source_data in data["sources"].items():
+                if isinstance(source_data, dict):
+                    source_data["_defaults"] = defaults_dict
+
+        super().__init__(**data)
+
+    @field_validator("queries", mode="after")
+    @classmethod
+    def validate_queries(cls, v: List[QueriesConfig], info: ValidationInfo) -> List[QueriesConfig]:
+        """Validate that query files exist under config_root/queries/."""
+        config_root = info.data.get("config_root")
+        if config_root is None:
+            raise ValueError("config_root is required to validate queries")
+        root = Path(config_root)
+        for query in v:
+            query_file_path = root / QUERIES_DIR / query.file
+            if not query_file_path.is_file():
+                raise ValueError(f"Query file not found: {query.file}")
+        return v
+
+    def load_query_file(self, query_name: str) -> str:
+        """
+        Load the SQL content of a predefined query by name.
+
+        Args:
+            query_name: Name of the query to load
+
+        Returns:
+            str: SQL content of the query
+
+        Raises:
+            ValueError: If the query is not found or file does not exist
+        """
+        query_config = next((q for q in self.queries if q.name == query_name), None)
+
+        if not query_config:
+            raise ValueError(f"Query not found: {query_name}")
+
+        query_file_path = self.config_root / QUERIES_DIR / query_config.file
+
+        if not query_file_path.is_file():
+            raise ValueError(f"Query file not found: {query_config.file}")
+
+        with open(query_file_path, "r") as file:
+            return file.read()
+
+
+class FieldConfig:
+    """Configuration for a data field."""
+
+    def __init__(
+        self,
+        name: str,
+        type: str = "string",
+        required: bool = False,
+        parent_field: bool = False,
+        **kwargs,
+    ):
+        """
+        Initialize field configuration.
+
+        Args:
+            name: Field name
+            type: Field data type
+            required: Whether the field is required
+            parent_field: Whether this is a parent field
+            **kwargs: Additional field configuration
+        """
+        self.name = name
+        self.type = type
+        self.required = required
+        self.parent_field = parent_field
+        self.config = kwargs

@@ -1,0 +1,41 @@
+version: "1.0"
+
+defaults:
+  retry:
+    max_attempts: 3
+    initial_delay: 1
+    backoff_factor: 2
+
+  loading:
+    destination: "s3"
+    format: "delta"
+    write_mode: "overwrite"
+    compression: "snappy"
+    bucket: "${S3_INGESTION_BUCKET}"
+
+  context:
+    type: "redis"
+    ttl: 3600
+    prefix: "pipeline:"
+    redis:
+      host: "${REDIS_HOST:-localhost}"
+      port: "${REDIS_PORT:-6379}"
+      db: "${REDIS_DB:-0}"
+      password: "${REDIS_PASSWORD:-}"
+      ssl: "${REDIS_SSL:-false}"
+      socket_timeout: 5
+      socket_connect_timeout: 5
+      retry_on_timeout: true
+      max_connections: 10
+
+  streaming:
+    enable_streaming: true
+    mode: "disk"
+    flush_threshold: 20
+    disk_config:
+      path: "../.tmp/disk_streaming"
+      file_size_threshold: 10000000
+
+# Named SQL files live under config/queries/ (operator-local, not committed).
+# See config/examples/sample_query.sql for a minimal template.
+queries: []

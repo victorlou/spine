@@ -1,0 +1,13 @@
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+exclude = ["__pycache__", ".venv", ".git"]
+
+[tool.ruff.lint]
+# Enable import sorting like isort
+# F = pyflakes, I = imports, B = bugbear, RUF = ruff-specific
+select = ["F", "I", "B", "RUF"]
+# Ignore E203 to be compatible with Black slice spacing
+ignore = ["E203"]

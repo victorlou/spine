@@ -1,0 +1,118 @@
+enabled: false
+type: "rest_api"
+base_url: "https://jsonplaceholder.typicode.com/"
+
+resources:
+  posts:
+    path: "posts"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      useless_param:
+        value: "test_value"
+        batch_size: 1
+
+    fields:
+      - name: "user_id"
+        source: "userId"
+      - name: "id"
+        source: "id"
+      - name: "title"
+        source: "title"
+      - name: "body"
+        source: "body"
+
+    loading:
+      prefix: "jsonplaceholder/posts"
+
+  comments:
+    path: "comments"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      postId:
+        value:
+          type: SOURCE
+          source_config:
+            source: "posts"
+            field: "id"
+        batch_size: 1
+
+    loading:
+      prefix: "jsonplaceholder/comments"
+
+  albums:
+    path: "albums"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      userId:
+        value:
+          type: SOURCE
+          source_config:
+            source: "posts"
+            field: "user_id"
+        batch_size: 1
+
+    loading:
+      prefix: "jsonplaceholder/albums"
+
+  photos:
+    path: "photos"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      albumId:
+        value:
+          type: SOURCE
+          source_config:
+            source: "albums"
+            field: "id"
+        batch_size: 1
+
+    loading:
+      prefix: "jsonplaceholder/photos"
+
+  todos:
+    enabled: false
+    path: "todos"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      userId:
+        value:
+          type: SOURCE
+          source_config:
+            source: "posts"
+            field: "user_id"
+        batch_size: 1
+
+    loading:
+      prefix: "jsonplaceholder/todos"
+
+  users:
+    path: "users"
+    method: "GET"
+    response_type: "json"
+
+    transformations:
+      - type: "add_column"
+        name: "_ingested_at"
+        value: "{{ now_iso() }}"
+
+    request_inputs:
+      id:
+        value:
+          type: SOURCE
+          source_config:
+            source: "posts"
+            field: "user_id"
+        batch_size: 1
+
+    loading:
+      prefix: "jsonplaceholder/users"

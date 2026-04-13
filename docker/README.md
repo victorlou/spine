@@ -84,7 +84,7 @@ If you add private wheels later, you can use a BuildKit secret and `pip.conf` du
 
 - `Dockerfile` — Python 3.12, Java 21, Redis, application
 - `docker-compose.yml` — Local development with volume mounts
-- `startup.sh` — Starts Redis, then runs the pipeline
+- `startup.sh` — Starts Redis, optional S3 config pull, then runs the pipeline
 
 ## Apple Silicon (M1/M2)
 

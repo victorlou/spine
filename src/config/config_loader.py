@@ -160,6 +160,14 @@ class ConfigLoader:
                 details={"path": str(defaults_path)},
             )
 
+        self.logger.debug(
+            "Loaded defaults.yml",
+            extra_fields={
+                "path": str(defaults_path.resolve()),
+                "config_dir": str(config_dir.resolve()),
+            },
+        )
+
         sources_dir = config_dir / "sources"
         sources: Dict[str, Any] = {}
         if sources_dir.exists() and sources_dir.is_dir():
@@ -177,6 +185,23 @@ class ConfigLoader:
                     ) from e
                 self._validate_source_file(source_content, source_file, source_name)
                 sources[source_name] = source_content
+
+        self.logger.debug(
+            "Scanned sources/*.yml for pipeline source configs",
+            extra_fields={
+                "config_dir": str(config_dir.resolve()),
+                "valid_source_config_count": len(sources),
+                "source_names": sorted(sources.keys()),
+            },
+        )
+        if not sources:
+            self.logger.warning(
+                "No valid source YAML files under sources/*.yml (defaults.yml is present but no loadable sources)",
+                extra_fields={
+                    "config_dir": str(config_dir.resolve()),
+                    "sources_dir": str(sources_dir),
+                },
+            )
 
         raw_config = {
             "version": defaults_config.get("version", "1.0"),

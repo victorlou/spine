@@ -704,10 +704,13 @@ class ResourceConfig(BaseModel):
         description="Request body keys to strip before sending (used for backfill-only fields that drive date generation but shouldn't be sent to the API)",
     )
 
-    # Fields to extract from response. If not specified, all fields will be extracted.
+    # Fields to extract from response or database extract. If not specified, all fields are used.
     fields: Optional[List[SchemaField]] = Field(
         default=None,
-        description="Fields to extract from response. If not specified, all fields will be extracted.",
+        description=(
+            "Fields to extract from REST responses or JDBC/HANA extracts. "
+            "If not specified, all fields from the response or extract are used (string-typed for databases)."
+        ),
     )
     transformations: List[Transformation] = Field(default_factory=list)
     loading: Optional[LoadingConfig] = Field(
@@ -942,7 +945,14 @@ class SourceConfig(BaseModel):
     port: Optional[Union[int, str]] = Field(default=None, description="Database port")
     username: Optional[str] = Field(default=None, description="Database user")
     password: Optional[str] = Field(default=None, description="Database password")
-    database: Optional[str] = Field(default=None, description="Database/catalog name")
+    database: Optional[str] = Field(
+        default=None,
+        description=(
+            "Database/catalog name. Required for postgresql. "
+            "Optional for hana: set to the HANA tenant database name when using a shared SQL port; "
+            "omit when the host:port already targets a single tenant."
+        ),
+    )
     connection_params: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Extra JDBC properties or URL query parameters (driver-specific).",
@@ -968,7 +978,7 @@ class SourceConfig(BaseModel):
                 raise ValueError(f"{self.type.value} source requires port")
             if not self.username or self.password is None:
                 raise ValueError(f"{self.type.value} source requires username and password")
-            if not self.database:
+            if self.type == SourceType.POSTGRESQL and not (self.database or "").strip():
                 raise ValueError(f"{self.type.value} source requires database")
             for resource_name, resource in self.resources.items():
                 if not resource.enabled:

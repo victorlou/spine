@@ -158,8 +158,13 @@ class TestStructuredLogger:
 
         output = capture_logs.getvalue()
 
-        # Split output into lines and verify each level appears
-        lines = output.strip().split("\n")
+        # Lines from this logger only (other libraries may emit DEBUG to the same handler).
+        raw_lines = output.strip().split("\n")
+        lines = []
+        for line in raw_lines:
+            parts = line.split(" | ")
+            if len(parts) >= 4 and parts[2].strip() == "test":
+                lines.append(line)
         expected_levels = {
             "TRACE": "trace message",
             "DEBUG": "debug message",

@@ -5,6 +5,7 @@
 - [Docker Local Development](#docker-local-development)
 - [CI and container images (GitHub Actions)](#ci-and-container-images-github-actions)
 - [Runtime configuration](#runtime-configuration)
+- [ECS Fargate and external config (reference)](deployment/ecs-s3-reference.md)
 - [Error Handling and Monitoring](#error-handling-and-monitoring)
 
 ## Docker Local Development
@@ -34,6 +35,7 @@ Images are public or private according to your GitHub package visibility setting
 - Set environment variables via your orchestrator (for example Kubernetes secrets, AWS Secrets Manager/SSM, or plain `.env` in development).
 - If you run without the default repo layout (for example a minimal image without operator config baked in), set `CONFIG_PATH` to an **absolute** path to a directory that contains `defaults.yml`, `sources/`, and optionally `queries/` (see [Configuration overview](configuration/overview.md)).
 - For AWS destinations, configure IAM for S3 and related services as needed.
+- For **ECS Fargate**, promoting config to **S3**, optional **`SPINE_CONFIG_S3_URI`** pull at container start (boto3), GHCR image pinning, and task-definition patterns (all placeholders), see the [ECS + S3 reference](deployment/ecs-s3-reference.md), including `python -m src.utils.s3_config_push` for one-off or CI uploads.
 
 ## Error Handling and Monitoring
 

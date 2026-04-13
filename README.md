@@ -151,6 +151,7 @@ src/
 | **Auth** | [OAuth JWT, bearer token, API key](docs/configuration/auth.md) |
 | **Transformations** | [add_column, add_column_from_request, ensure_param_values](docs/configuration/transformations.md) |
 | **Deployment** | [Docker, GitHub Actions, GHCR](docs/deployment.md) |
+| **ECS / Fargate + S3 (reference)** | [S3 push/pull boto3, IAM, ECS task def](docs/deployment/ecs-s3-reference.md) |
 | **Development** | [Linting, testing, debugging, extending](docs/development.md) |
 
 ---

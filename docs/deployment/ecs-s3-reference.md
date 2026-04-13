@@ -111,7 +111,7 @@ Example URI (neutral): `s3://example-org-spine-config/prod/`
 |----------|----------|---------|
 | `SPINE_CONFIG_S3_URI` | Optional | When set, `docker/startup.sh` pulls this prefix into the sync target **before** `python -m src.main` (boto3). When unset, no S3 read for config at start. |
 | `CONFIG_PATH` | Optional | **Absolute** path for config after pull. If unset while `SPINE_CONFIG_S3_URI` is set, pull uses **`/app/config`**. If both unset, Spine uses its normal default (`/app/config` via `CONFIG_PATH=.`). |
-| `LOG_LEVEL` | Optional | Set to **`DEBUG`** temporarily to log `valid_source_config_count` and `source_names` after config load; startup lines use the **`[spine-startup]`** prefix on stderr (same CloudWatch log stream as the app). |
+| `LOG_LEVEL` | Optional | Set to **`DEBUG`**, can be adjusted as defined in `src/utils/logger.py`.|
 | Other app secrets | As needed | Use `secrets` from AWS Secrets Manager or SSM Parameter Store as supported by ECS. |
 
 ---

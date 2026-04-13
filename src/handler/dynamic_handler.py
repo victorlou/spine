@@ -23,6 +23,7 @@ from src.config.config_models import (
     PaginationConfig,
     PaginationType,
     ResourceConfig,
+    SchemaField,
     SourceConfig,
     SourceType,
 )
@@ -1788,19 +1789,17 @@ class DynamicHandler(BaseHandler):
     ) -> Optional[DataFrame]:
         """
         Connect, extract via Spark JDBC / HANA driver, project to configured fields (string typed).
+
+        When ``fields`` is omitted or empty, output columns match the extract (name and source
+        equal each result column), same idea as REST resources without an explicit field list.
         """
         resource_config = resource_meta.config
-        fields = resource_config.fields
-        if not fields:
-            raise HandlerError(
-                "Database resources require fields (output schema) in configuration",
-                operation="process_resource",
-                details={"resource_name": resource_meta.resource_name},
-            )
+        configured_fields = resource_config.fields
         schema = str(resource_config.database_schema).strip()
         table = str(resource_config.database_table).strip()
         all_df: Optional[DataFrame] = None
         service.connect()
+        inferred_schema_logged = False
         try:
             for _ctx in request_contexts:
                 df = service.extract_table(
@@ -1809,6 +1808,20 @@ class DynamicHandler(BaseHandler):
                     select_query=resource_config.database_select_query,
                     spark_session=self.spark,
                 )
+                if configured_fields:
+                    fields = configured_fields
+                else:
+                    fields = [SchemaField(name=c, source=c) for c in df.columns]
+                    if not inferred_schema_logged:
+                        self.logger.info(
+                            "Database extract has no configured fields; inferring output columns from extract",
+                            extra_fields={
+                                "resource_name": resource_meta.resource_name,
+                                "source": resource_meta.source_name,
+                                "inferred_columns": list(df.columns),
+                            },
+                        )
+                        inferred_schema_logged = True
                 select_cols = []
                 for f in fields:
                     if f.source not in df.columns:
@@ -2509,15 +2522,13 @@ class DynamicHandler(BaseHandler):
                 for resource_name, resource_config in source_config.resources.items():
                     self.logger.debug(f"Validating resource: {resource_name}")
 
-                    # Validate schema fields
-                    if not resource_config.fields:
-                        raise HandlerError(f"No schema defined for resource: {resource_name}")
-
-                    for field in resource_config.fields:
-                        if not field.name:
-                            raise HandlerError(
-                                f"Invalid schema field in {resource_name}: name is required"
-                            )
+                    # Validate schema fields when explicitly configured (optional for REST and DB)
+                    if resource_config.fields:
+                        for field in resource_config.fields:
+                            if not field.name:
+                                raise HandlerError(
+                                    f"Invalid schema field in {resource_name}: name is required"
+                                )
 
                     # Validate loading configuration (if provided)
                     if resource_config.loading:

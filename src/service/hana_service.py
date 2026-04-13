@@ -120,8 +120,11 @@ class HanaService(SqlDatabaseService):
             f"hana://{self.config.username}:{password}@"
             f"{self.config.host}:{int(self.config.port)}"
         )
-        if self.config.database:
-            connection_string = f"{connection_string}/{self.config.database}"
+        # hdbcli `databaseName` must match a real HANA tenant; omit URL path when unset so
+        # tenant-scoped SQL ports (common on BW) can connect without a bogus placeholder.
+        db = (self.config.database or "").strip()
+        if db:
+            connection_string = f"{connection_string}/{db}"
         if self.config.connection_params:
             param_parts = [f"{key}={value}" for key, value in self.config.connection_params.items()]
             if param_parts:

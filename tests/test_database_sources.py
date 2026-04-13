@@ -70,3 +70,30 @@ def test_hana_source_valid():
         resources={"dim": _db_resource()},
     )
     assert cfg.type == SourceType.HANA
+
+
+def test_hana_source_valid_without_database():
+    cfg = SourceConfig(
+        type=SourceType.HANA,
+        host="hana.example",
+        port="30244",
+        username="u",
+        password="p",
+        database=None,
+        resources={"dim": _db_resource()},
+    )
+    assert cfg.type == SourceType.HANA
+    assert cfg.database is None
+
+
+def test_postgresql_source_rejects_empty_database():
+    with pytest.raises(ValidationError, match="requires database"):
+        SourceConfig(
+            type=SourceType.POSTGRESQL,
+            host="localhost",
+            port=5432,
+            username="u",
+            password="p",
+            database="",
+            resources={"r": _db_resource()},
+        )

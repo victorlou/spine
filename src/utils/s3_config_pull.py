@@ -39,7 +39,7 @@ def pull_s3_prefix_to_directory(uri: str, target: Path) -> None:
     target = target.resolve()
     target.mkdir(parents=True, exist_ok=True)
 
-    count = 0
+    downloaded_any = False
     try:
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
@@ -52,11 +52,11 @@ def pull_s3_prefix_to_directory(uri: str, target: Path) -> None:
                 dest = target / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 client.download_file(bucket, key, str(dest))
-                count += 1
+                downloaded_any = True
     except ClientError as e:
         raise RuntimeError(f"Failed to pull config from {uri!r}: {e}") from e
 
-    if count == 0:
+    if not downloaded_any:
         raise RuntimeError(
             f"No objects downloaded from {uri!r} (check bucket, prefix, and IAM). "
             f"Expected files such as defaults.yml under the prefix."

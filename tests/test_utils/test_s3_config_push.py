@@ -50,6 +50,9 @@ def test_iter_operator_config_files_includes_and_excludes(tmp_path: Path) -> Non
     examples = tmp_path / "examples"
     examples.mkdir()
     (examples / "e.yml").write_text("e", encoding="utf-8")
+    nested_examples = tmp_path / "sources" / "examples"
+    nested_examples.mkdir()
+    (nested_examples / "nested.yml").write_text("n", encoding="utf-8")
     (tmp_path / "sources" / ".gitkeep").write_text("", encoding="utf-8")
 
     rels = {rel for _, rel in iter_operator_config_files(tmp_path)}

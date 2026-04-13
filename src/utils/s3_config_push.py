@@ -21,6 +21,12 @@ from botocore.exceptions import ClientError
 
 __all__ = ["iter_operator_config_files", "parse_s3_uri", "push_config_to_s3"]
 
+_EXCLUDED_BASENAMES = {"README.md", ".gitkeep"}
+_INCLUDED_SUBTREES: tuple[tuple[str, str], ...] = (
+    ("sources/", ".yml"),
+    ("queries/", ".sql"),
+)
+
 
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -60,6 +66,20 @@ def _normalize_key_prefix(prefix: str) -> str:
     return f"{p}/" if p else ""
 
 
+def _is_excluded_config_path(rel: str, name: str) -> bool:
+    if rel.startswith("examples/") or "/examples/" in rel:
+        return True
+    if name in _EXCLUDED_BASENAMES:
+        return True
+    return fnmatch(name, "*.example.yml")
+
+
+def _is_included_config_path(rel: str) -> bool:
+    if rel == "defaults.yml":
+        return True
+    return any(rel.startswith(prefix) and rel.endswith(suffix) for prefix, suffix in _INCLUDED_SUBTREES)
+
+
 def iter_operator_config_files(config_root: Path) -> Iterator[Tuple[Path, str]]:
     """
     Yield ``(absolute_path, relative_posix_path)`` for files to upload.
@@ -78,20 +98,10 @@ def iter_operator_config_files(config_root: Path) -> Iterator[Tuple[Path, str]]:
             rel = path.relative_to(root).as_posix()
         except ValueError:
             continue
-        if rel.startswith("examples/") or "/examples/" in rel:
-            continue
-        if path.name == "README.md":
-            continue
-        if path.name == ".gitkeep":
-            continue
-        if fnmatch(path.name, "*.example.yml"):
+        if _is_excluded_config_path(rel, path.name):
             continue
 
-        if rel == "defaults.yml":
-            yield path, rel
-        elif rel.startswith("sources/") and rel.endswith(".yml"):
-            yield path, rel
-        elif rel.startswith("queries/") and rel.endswith(".sql"):
+        if _is_included_config_path(rel):
             yield path, rel
 
 

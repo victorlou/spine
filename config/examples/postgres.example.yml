@@ -18,6 +18,13 @@ database: ${PG_DATABASE}
 connection_params: {}
 
 resources:
+  # Full-table style: omit `fields` to include every column returned by the extract (all cast to string),
+  # same idea as REST resources without a field list. Prefer an explicit `fields` block when you need
+  # a subset of columns, stable renames (`name` vs `source`), or a documented output contract.
+  users_full:
+    method: GET
+    database_schema: public
+    database_table: users
   users:
     method: GET
     database_schema: public

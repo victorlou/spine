@@ -77,7 +77,9 @@ def _is_excluded_config_path(rel: str, name: str) -> bool:
 def _is_included_config_path(rel: str) -> bool:
     if rel == "defaults.yml":
         return True
-    return any(rel.startswith(prefix) and rel.endswith(suffix) for prefix, suffix in _INCLUDED_SUBTREES)
+    return any(
+        rel.startswith(prefix) and rel.endswith(suffix) for prefix, suffix in _INCLUDED_SUBTREES
+    )
 
 
 def iter_operator_config_files(config_root: Path) -> Iterator[Tuple[Path, str]]:

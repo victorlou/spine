@@ -74,7 +74,13 @@ docker run --rm \
 
 ## CI-built images
 
-On pushes to **`main`** or **`v*` version tags**, GitHub Actions publishes an image to `ghcr.io` (see [docs/deployment.md](../docs/deployment.md)). Pull with your organization or user name and the repository name in lowercase, for example `docker pull ghcr.io/victorlou/spine:latest` or `docker pull ghcr.io/victorlou/spine:v1.0.0`.
+On pushes to **`main`** or **`v*` version tags**, GitHub Actions publishes a multi-arch image (manifest list for `linux/amd64` and `linux/arm64`) to `ghcr.io` (see [docs/deployment.md](../docs/deployment.md)). Pull with your organization or user name and the repository name in lowercase, for example `docker pull ghcr.io/victorlou/spine:latest` or `docker pull ghcr.io/victorlou/spine:v1.0.0`.
+
+Verify published manifest platforms with:
+
+```bash
+docker buildx imagetools inspect ghcr.io/victorlou/spine:latest
+```
 
 Runtime configuration in production should come from your orchestrator (secrets, task env), not from baking `.env` into the image.
 
@@ -164,7 +170,9 @@ If you add private wheels later, you can use a BuildKit secret and `pip.conf` du
 
 ## Apple Silicon (M1/M2)
 
-Use `--platform linux/amd64` when building to match common Linux/x86 deploy targets and avoid Java/Spark issues:
+Published GHCR images are multi-arch, so Apple Silicon hosts can pull `ghcr.io/victorlou/spine:*` directly without setting `--platform`.
+
+Use `--platform linux/amd64` only when you explicitly need to emulate x86_64 (for compatibility testing against amd64-only environments):
 
 ```bash
 docker build --platform linux/amd64 ...

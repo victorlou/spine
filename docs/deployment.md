@@ -22,13 +22,19 @@ For full details (CLI args, Apple Silicon), see [docker/README.md](../docker/REA
 
 Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, and on **version tag** pushes (`v*`), via [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
-The workflow **builds and pushes** a container image to the [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) (`ghcr.io`) on pushes to **`main`** and on **`v*` tags** (for example `ghcr.io/victorlou/spine:latest` plus a SHA tag on `main`, and `ghcr.io/victorlou/spine:v1.2.3` when you push tag `v1.2.3`). Pushes to `dev` only run lint and tests.
+The workflow **builds and pushes** a multi-arch container image (manifest list for `linux/amd64` and `linux/arm64`) to the [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) (`ghcr.io`) on pushes to **`main`** and on **`v*` tags** (for example `ghcr.io/victorlou/spine:latest` plus a SHA tag on `main`, and `ghcr.io/victorlou/spine:v1.2.3` when you push tag `v1.2.3`). Pushes to `dev` only run lint and tests.
 
 Requirements for the image job:
 
 - **Packages** permission for `GITHUB_TOKEN` (the workflow grants `packages: write` on the publish job only).
 
 Images are public or private according to your GitHub package visibility settings for the container package.
+
+After publish, you can verify manifest platforms with:
+
+```bash
+docker buildx imagetools inspect ghcr.io/victorlou/spine:latest
+```
 
 ## Runtime configuration
 

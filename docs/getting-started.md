@@ -48,7 +48,7 @@ docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --
 docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --select jsonplaceholder --limit 5
 ```
 
-**Apple Silicon (M1/M2)**: Add `--platform linux/amd64` to the build for compatibility.
+**Apple Silicon (M1/M2)**: Published GHCR images are multi-arch, so pull directly by tag. Add `--platform linux/amd64` only when you explicitly need x86_64 emulation.
 
 See [docker/README.md](../docker/README.md) for more Docker details.
 

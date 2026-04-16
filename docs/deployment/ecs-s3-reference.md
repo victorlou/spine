@@ -41,11 +41,11 @@ flowchart LR
 The public image **`ENTRYPOINT`** is `/startup.sh` (Redis, then `python -m src.main`). You do **not** need to override `command` or `entryPoint` if you use the built-in pull:
 
 1. Set **`SPINE_CONFIG_S3_URI`** to your operator prefix, for example `s3://<bucket-from-your-infra>/config/` (objects under that prefix should mirror `defaults.yml`, `sources/…`, `queries/…`).
-2. Optionally set **`CONFIG_PATH`** to an **absolute** directory inside the container (recommended for clarity). If unset, pull targets **`/app/config`**, which matches Spine’s default resolution for `CONFIG_PATH=.`.
+2. Optionally set **`CONFIG_PATH`** to an **absolute** directory inside the container (recommended for clarity). If unset, pull targets **`/config`**, which matches Spine’s default resolution for `CONFIG_PATH=.`.
 
 `startup.sh` runs `python -m src.utils.s3_config_pull` (boto3) before the app. The task **IAM role** must allow **`s3:GetObject`** on `prefix/*` and **`s3:ListBucket`** on the bucket (often prefix-scoped in the bucket policy).
 
-**Merge vs delete:** pull **downloads and overwrites** keys that exist in S3; it does **not** delete extra files already on disk under the target path (unlike `aws s3 sync --delete`). The image may ship template files under `/app/config`; if that is a problem, set `CONFIG_PATH` to a dedicated empty path (for example `/app/config-runtime`) and pull there instead.
+**Merge vs delete:** pull **downloads and overwrites** keys that exist in S3; it does **not** delete extra files already on disk under the target path (unlike `aws s3 sync --delete`). The image may ship template files under `/config`; if that is a problem, set `CONFIG_PATH` to a dedicated empty path (for example `/config-runtime`) and pull there instead.
 
 ---
 
@@ -85,6 +85,45 @@ Requires AWS credentials (profile or env) with **`s3:PutObject`** on `your-prefi
 
 ---
 
+## Local operator validation with published image
+
+From a fresh operator repository (config + `.env`, no Spine source checkout), run:
+
+```bash
+docker run --rm \
+  -v "$(pwd)/config:/config:ro" \
+  --env-file .env \
+  ghcr.io/victorlou/spine:vX.Y.Z \
+  --select your_source
+```
+
+This uses the default config path contract (`/config`). If you mount elsewhere, set `CONFIG_PATH` accordingly (for example `-e CONFIG_PATH=/my-config`).
+
+```bash
+-e CONFIG_PATH=/config
+```
+
+Credential strategies:
+
+- **AWS profile**: set `AWS_PROFILE` in `.env` and mount `-v "$HOME/.aws:/root/.aws:ro"`.
+- **Direct env credentials**: set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION`.
+
+For SSO profiles, login on host first:
+
+```bash
+aws sso login --profile your_profile
+```
+
+If you hit `The config profile (...) could not be found`, check profile name, mount presence, SSO freshness, and run:
+
+```bash
+aws sts get-caller-identity --profile your_profile
+```
+
+on the host to verify credentials before container startup.
+
+---
+
 ## Container image: GitHub Container Registry (GHCR)
 
 - **Public package:** ECS task definitions usually omit `repositoryCredentials`; any principal that can pull from `ghcr.io` can use the image reference.
@@ -110,7 +149,7 @@ Example URI (neutral): `s3://example-org-spine-config/prod/`
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `SPINE_CONFIG_S3_URI` | Optional | When set, `docker/startup.sh` pulls this prefix into the sync target **before** `python -m src.main` (boto3). When unset, no S3 read for config at start. |
-| `CONFIG_PATH` | Optional | **Absolute** path for config after pull. If unset while `SPINE_CONFIG_S3_URI` is set, pull uses **`/app/config`**. If both unset, Spine uses its normal default (`/app/config` via `CONFIG_PATH=.`). |
+| `CONFIG_PATH` | Optional | **Absolute** path for config after pull. If unset while `SPINE_CONFIG_S3_URI` is set, pull uses **`/config`**. If both unset, Spine uses its normal default (`/config` via `CONFIG_PATH=.`). |
 | `LOG_LEVEL` | Optional | Set to **`DEBUG`**, can be adjusted as defined in `src/utils/logger.py`.|
 | Other app secrets | As needed | Use `secrets` from AWS Secrets Manager or SSM Parameter Store as supported by ECS. |
 

@@ -72,8 +72,19 @@ class AWSCredentialManager:
         except AWSError:
             raise
         except Exception as e:
+            hint = ""
+            err_text = str(e)
+            if "config profile" in err_text and "could not be found" in err_text:
+                hint = (
+                    " Hint: AWS_PROFILE is set but profile files are not available in the runtime. "
+                    "If running in Docker, mount $HOME/.aws:/root/.aws:ro (and run aws sso login first "
+                    "for SSO profiles), or provide AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY directly."
+                )
+            message = f"Failed to load AWS credentials: {e!s}"
+            if hint:
+                message = f"{message}. {hint.strip()}"
             raise AWSError(
-                message=f"Failed to load AWS credentials: {e!s}",
+                message=message,
                 operation="_load_credentials",
                 service="iam",
                 original_error=e,

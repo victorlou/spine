@@ -99,15 +99,11 @@ docker run --rm \
 
 This uses the default config path contract (`/config`). If you mount elsewhere, set `CONFIG_PATH` accordingly (for example `-e CONFIG_PATH=/my-config`).
 
-```bash
--e CONFIG_PATH=/config
-```
-
 Credential strategies:
 
-- **AWS profile (static keys)**: set `AWS_PROFILE` in `.env` and mount `-v "$HOME/.aws:/root/.aws:ro"`.
-- **AWS profile (SSO)**: mount `-v "$HOME/.aws:/root/.aws"` (writable) so SSO cache refresh can write under `/root/.aws/sso/cache`.
-- **Direct env credentials**: set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION`.
+- **AWS profile (static keys):** set `AWS_PROFILE` in `.env` and mount `-v "$HOME/.aws:/root/.aws:ro"`.
+- **AWS profile (SSO):** mount `-v "$HOME/.aws:/root/.aws"` (writable) so SSO cache refresh can write under `/root/.aws/sso/cache`.
+- **Direct env credentials:** set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION`.
 
 For SSO profiles, login on host first:
 

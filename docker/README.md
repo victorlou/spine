@@ -94,16 +94,6 @@ docker run --rm \
   --select your_source
 ```
 
-If you prefer mounting to `/config`, set `CONFIG_PATH=/config`:
-
-```bash
-docker run --rm \
-  -v "$(pwd)/config:/config:ro" \
-  --env-file .env \
-  -e CONFIG_PATH=/config \
-  ghcr.io/victorlou/spine:vX.Y.Z \
-  --select your_source
-```
 
 ### AWS credentials options
 

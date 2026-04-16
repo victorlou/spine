@@ -23,8 +23,8 @@ RUN sed -i 's/^save/# save/' /etc/redis/redis.conf && \
     echo "save \"\"" >> /etc/redis/redis.conf && \
     echo "appendonly no" >> /etc/redis/redis.conf
 
-# Create app directory
-WORKDIR /app
+# Use filesystem root so runtime paths map directly to /config and /src
+WORKDIR /
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
@@ -36,7 +36,7 @@ COPY src/ src/
 COPY config/ config/
 
 # Set Python path
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/
 
 # Create startup script
 COPY docker/startup.sh /startup.sh

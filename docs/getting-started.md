@@ -41,9 +41,9 @@ The easiest way to run the pipeline. Requires Docker and Docker Compose.
 docker build --platform linux/amd64 -t spine -f docker/Dockerfile .
 
 # Run with args
-docker run --rm -v "$(pwd)/.env:/app/.env:ro" -v "$(pwd)/config:/app/config:ro" spine --show-plan
-docker run --rm -v "$(pwd)/.env:/app/.env:ro" -v "$(pwd)/config:/app/config:ro" spine --validate-only
-docker run --rm -v "$(pwd)/.env:/app/.env:ro" -v "$(pwd)/config:/app/config:ro" spine --select jsonplaceholder --limit 5
+docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --show-plan
+docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --validate-only
+docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --select jsonplaceholder --limit 5
 ```
 
 **Apple Silicon (M1/M2)**: Add `--platform linux/amd64` to the build for compatibility.

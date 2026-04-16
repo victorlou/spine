@@ -1,0 +1,33 @@
+name: GHCR Cleanup
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Package coordinates (lowercase for GHCR)
+        id: package
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          repository="$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')"
+          echo "owner=${owner}" >> "$GITHUB_OUTPUT"
+          echo "repository=${repository}" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup obsolete GHCR tags and manifests
+        uses: jenskeiner/ghcr-container-repository-cleanup-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: ${{ steps.package.outputs.owner }}
+          repository: ${{ steps.package.outputs.repository }}
+          package: ${{ steps.package.outputs.repository }}
+          exclude-tags: ^(?:latest|v.*)$
+          keep-n-tagged: 10
+          keep-n-untagged: 0

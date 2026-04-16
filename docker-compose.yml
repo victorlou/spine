@@ -6,5 +6,5 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     volumes:
-      - ./.env:/app/.env:ro
-      - ./config:/app/config:ro
+      - ./.env:/.env:ro
+      - ./config:/config:ro

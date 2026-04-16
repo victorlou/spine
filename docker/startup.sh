@@ -16,7 +16,7 @@ echo "[spine-startup] Redis is ready." >&2
 
 # Optional: pull operator config from S3 (boto3; no AWS CLI). Off when unset.
 if [ -n "${SPINE_CONFIG_S3_URI:-}" ]; then
-  SYNC_TARGET="${CONFIG_PATH:-/app/config}"
+  SYNC_TARGET="${CONFIG_PATH:-/config}"
   mkdir -p "${SYNC_TARGET}"
   echo "[spine-startup] Pulling config from ${SPINE_CONFIG_S3_URI} -> ${SYNC_TARGET}" >&2
   python -m src.utils.s3_config_pull "${SPINE_CONFIG_S3_URI}" "${SYNC_TARGET}"

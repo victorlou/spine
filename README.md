@@ -2,72 +2,37 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Spine is a developer-first ingestion layer that standardizes how data enters your platform.**
+**Spine is a configuration-first ingestion framework for teams that are tired of rebuilding the same ingestion logic for every new source, table, and destination.**
 
-It is not a no-code tool, nor a collection of prebuilt connectors.  
-Spine is an opinionated foundation for building, scaling, and maintaining ingestion pipelines through configuration, structure, and shared patterns.
+If your team keeps rewriting the same auth, retry, pagination, backfill, and loading logic for every new API or table, Spine is the part where that repetition stops getting a free pass.
+
+It is not a no-code product, a connector marketplace, or a black box. It is a modular runtime with one execution model, one config shape, and clear extension points for services, parsers, collectors, and loaders.
 
 ---
 
 ## Why Spine?
 
-Most data teams don’t struggle to *ingest data* — they struggle to do it **consistently, reliably, and at scale**.
+The hard part is usually not getting data out of one API once. The hard part is doing it the same way across many sources, keeping it reliable in production, and not creating a new snowflake every time somebody asks for one more table.
 
-Ingestion often becomes:
-- Dozens of one-off scripts
-- Inconsistent patterns across sources
-- Hard-to-maintain pipelines
-- No shared standards across teams
+Ingestion usually drifts into:
+- One-off scripts that only one person trusts
+- Different auth, retry, and pagination patterns per source
+- Config scattered across code, notebooks, and environment-specific glue
+- Pipelines that work until backfills, partial failures, or new destinations show up
 
-Spine solves this by introducing a **unified ingestion layer**:
+Spine gives you a shared modular shape for that work:
 
-> One way to define ingestion. One way to run it. One way to scale it.
-
----
-
-## What Spine Is (and isn’t)
-
-**Spine is:**
-- A **configuration-first ingestion system**
-- A **standardized entry point** into your data platform
-- A **developer-focused tool** designed for extensibility and control
-- A **foundation layer** that fits naturally into modern architectures (e.g. medallion)
-
-**Spine is not:**
-- A no-code ingestion tool
-- A managed connector platform
-- A black-box abstraction over your pipelines
-
-You build and extend it. Spine ensures everything follows the same structure.
-
----
-
-## Core Principles
-
-### 1. Standardization over ad hoc pipelines
-All ingestion follows the same structure — regardless of source.
-
-### 2. Configuration over code
-Pipelines are defined through YAML, not scattered scripts.
-
-### 3. Extensibility by design
-New sources, auth methods, and loaders can be added without breaking the system.
-
-### 4. Clear separation of concerns
-Authentication, extraction, transformation, and loading are modular and composable.
-
-### 5. Platform-first thinking
-Spine is not just a tool — it’s a **layer in your data platform**.
+> Define pipelines in YAML. Validate them up front. Build an execution plan. Run them with the same service, parser, and loader patterns every time.
 
 ---
 
 ## Features
 
-- **Modular architecture** — Authentication, fetching, transformation, and loading
-- **Configuration-driven** — YAML-based sources and endpoints
+- **Configuration-driven** — YAML-based sources, resources, defaults, and queries under `config/`
+- **Modular architecture** — Clear seams for services, handlers, parsers, collectors, and loaders
 - **Execution planning** — Dependency resolution and optimized execution order
-- **Resilient execution** — Retries and failure isolation per source/endpoint
-- **Extensible design** — Plug in new sources, loaders, and services
+- **Resilient execution** — Validation up front, retries, backfills, and failure isolation per source/resource
+- **Extensible design** — Add new sources, auth methods, loaders, and transformations without inventing a new flow
 - **Flexible inputs** — Path, query, body, dynamic parameters (dates, upstream data, etc.)
 
 ---
@@ -156,11 +121,12 @@ src/
 
 ---
 
-## Vision
+## When Spine Fits
 
-Spine aims to become the **standard foundation layer for ingestion in modern data platforms**.
+Spine is a good fit when you want ingestion work to stop fragmenting into source-specific scripts and conventions.
 
-As data ecosystems grow, ingestion should not be reinvented for every source.
-It should be structured, consistent, and scalable by design.
-
-Spine is that foundation.
+It is especially useful when:
+- You have multiple APIs, databases, or resources that should follow the same operational model
+- You want new tables or sources to be mostly a config and schema exercise, not a brand new code path
+- You need production concerns like retries, validation, backfills, and failure isolation to be built in from the start
+- You want a framework your team can extend deliberately, instead of a connector platform you eventually have to work around

@@ -36,17 +36,19 @@ The easiest way to run the pipeline. Requires Docker and Docker Compose.
 
 `docker-compose up` runs the default pipeline. For `--show-plan`, `--validate-only`, `--select`, etc., use `docker run`:
 
+On **Windows**, prefer running Docker commands in **PowerShell**. If you use Git Bash, prefix commands with `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'` so mount paths like `/config` are not rewritten.
+
 ```bash
 # Build the image first (or use an existing one from ghcr.io)
 docker build --platform linux/amd64 -t spine -f docker/Dockerfile .
 
 # Run with args
-docker run --rm -v "$(pwd)/.env:/app/.env:ro" -v "$(pwd)/config:/app/config:ro" spine --show-plan
-docker run --rm -v "$(pwd)/.env:/app/.env:ro" -v "$(pwd)/config:/app/config:ro" spine --validate-only
-docker run --rm -v "$(pwd)/.env:/app/.env:ro" -v "$(pwd)/config:/app/config:ro" spine --select jsonplaceholder --limit 5
+docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --show-plan
+docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --validate-only
+docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --select jsonplaceholder --limit 5
 ```
 
-**Apple Silicon (M1/M2)**: Add `--platform linux/amd64` to the build for compatibility.
+**Apple Silicon (M1/M2)**: Published GHCR images are multi-arch, so pull directly by tag. Add `--platform linux/amd64` only when you explicitly need x86_64 emulation.
 
 See [docker/README.md](../docker/README.md) for more Docker details.
 

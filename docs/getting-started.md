@@ -36,6 +36,8 @@ The easiest way to run the pipeline. Requires Docker and Docker Compose.
 
 `docker-compose up` runs the default pipeline. For `--show-plan`, `--validate-only`, `--select`, etc., use `docker run`:
 
+On **Windows**, prefer running Docker commands in **PowerShell**. If you use Git Bash, prefix commands with `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'` so mount paths like `/config` are not rewritten.
+
 ```bash
 # Build the image first (or use an existing one from ghcr.io)
 docker build --platform linux/amd64 -t spine -f docker/Dockerfile .

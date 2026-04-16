@@ -105,7 +105,8 @@ This uses the default config path contract (`/config`). If you mount elsewhere, 
 
 Credential strategies:
 
-- **AWS profile**: set `AWS_PROFILE` in `.env` and mount `-v "$HOME/.aws:/root/.aws:ro"`.
+- **AWS profile (static keys)**: set `AWS_PROFILE` in `.env` and mount `-v "$HOME/.aws:/root/.aws:ro"`.
+- **AWS profile (SSO)**: mount `-v "$HOME/.aws:/root/.aws"` (writable) so SSO cache refresh can write under `/root/.aws/sso/cache`.
 - **Direct env credentials**: set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION`.
 
 For SSO profiles, login on host first:
@@ -121,6 +122,14 @@ aws sts get-caller-identity --profile your_profile
 ```
 
 on the host to verify credentials before container startup.
+
+For Windows operators using **Git Bash**, prefix `docker run` with:
+
+```bash
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+```
+
+or run the command from PowerShell. Git Bash path conversion can rewrite `/root/.aws` and `/config`, causing false profile-not-found errors even when host credentials are valid.
 
 ---
 

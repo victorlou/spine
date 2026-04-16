@@ -31,6 +31,8 @@ Docker Compose builds the image, mounts `.env` at `/.env`, mounts `config/`, and
 
 For more control (for example passing CLI args):
 
+**Windows note:** run these commands in **PowerShell**. If you use Git Bash (MSYS), prefix with `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'` to avoid path conversion issues with mounts and `--entrypoint`.
+
 1. **Build**
    ```bash
    docker build \
@@ -116,11 +118,25 @@ docker run --rm \
   --select your_source
 ```
 
+Use `:ro` for static key-based profiles. For SSO profiles, use a writable mount so token cache can refresh:
+
+```bash
+-v "$HOME/.aws:/root/.aws"
+```
+
 Before running with SSO profiles, authenticate on the host:
 
 ```bash
 aws sso login --profile your_profile
 ```
+
+**Windows + Git Bash:** use:
+
+```bash
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run ...
+```
+
+Without this, Git Bash may rewrite `/root/.aws` and break profile detection in the container.
 
 Environment-key-based (no shared profile mount):
 
@@ -141,9 +157,10 @@ If you see `The config profile (...) could not be found`:
 
 1. Confirm the profile exists on host: `aws configure list-profiles`.
 2. Confirm host auth works: `aws sts get-caller-identity --profile your_profile`.
-3. Ensure `-v "$HOME/.aws:/root/.aws:ro"` is present when using `AWS_PROFILE`.
-4. Re-run `aws sso login --profile your_profile` if using SSO.
-5. Confirm region is set (`AWS_REGION` or profile region).
+3. Ensure `.aws` is mounted at `/root/.aws` when using `AWS_PROFILE`.
+4. If using SSO profile, mount `.aws` writable (`-v "$HOME/.aws:/root/.aws"`), not `:ro`.
+5. Re-run `aws sso login --profile your_profile` if using SSO.
+6. Confirm region is set (`AWS_REGION` or profile region).
 
 ## Private PyPI (optional)
 

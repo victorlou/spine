@@ -22,7 +22,7 @@ from src.auth.jwt_providers import get_provider
 from src.config.config_models import ResourceConfig, SourceConfig
 from src.config.settings import Settings
 from src.service.base_service import BaseSourceService, ServiceError
-from src.utils.api_response import dict_response_key_to_records
+from src.utils.data_utils import dict_response_key_to_records
 from src.utils.dynamic_values import get_resolver, resolve_headers_dict, resolve_request_body
 from src.utils.logger import REDACTED_PLACEHOLDER, get_logger, redact_text
 from src.utils.redis_context import RedisContextManager

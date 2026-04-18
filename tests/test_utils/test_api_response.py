@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.config.config_models import ResourceConfig
-from src.utils.api_response import dict_response_key_to_records
+from src.utils.data_utils import dict_response_key_to_records
 
 
 class TestDictResponseKeyToRecords:

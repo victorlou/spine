@@ -12,10 +12,10 @@ from pyspark.sql.types import StringType, StructField, StructType
 
 from src.config.config_models import ResourceConfig, TransformationType
 from src.planner.execution_plan import ExecutionPlan
-from src.utils.api_response import dict_response_key_to_records
 from src.utils.data_utils import (
     add_iteration_context_to_record,
     build_params_json,
+    dict_response_key_to_records,
     get_include_as_field_params,
     get_nested_value,
 )

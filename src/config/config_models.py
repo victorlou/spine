@@ -674,6 +674,82 @@ class PythonSDKConfig(BaseModel):
     )
 
 
+class TableReadOptions(BaseModel):
+    """
+    Optional Spark ``DataFrameReader.jdbc`` read tuning for large relational table extracts.
+
+    Use either **range partitioning** (partition_column + bounds + num_partitions) or
+    **predicates** (list of WHERE fragments for parallel reads), not both.
+    Source types that do not read via Spark JDBC yet reject this block at validation time.
+    """
+
+    fetch_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="JDBC fetchSize hint passed through Spark connection properties.",
+    )
+    partition_column: Optional[str] = Field(
+        default=None,
+        description="Numeric (or date-castable) column for Spark parallel range reads.",
+    )
+    lower_bound: Optional[Union[int, float]] = Field(
+        default=None,
+        description="Inclusive lower bound for partition_column (operator-supplied).",
+    )
+    upper_bound: Optional[Union[int, float]] = Field(
+        default=None,
+        description="Inclusive upper bound for partition_column (operator-supplied).",
+    )
+    num_partitions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of JDBC partitions when using partition_column.",
+    )
+    predicates: Optional[List[str]] = Field(
+        default=None,
+        description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
+    )
+    log_exact_row_count: bool = Field(
+        default=False,
+        description=(
+            "When True, run df.count() after read for exact row logging (full scan). "
+            "When False and a parallel read is configured, row count is omitted to avoid an extra scan."
+        ),
+    )
+
+    def uses_parallel_read(self) -> bool:
+        """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
+        if self.predicates is not None and len(self.predicates) > 0:
+            return True
+        col = (self.partition_column or "").strip()
+        return bool(col)
+
+    @model_validator(mode="after")
+    def validate_partitioning(self) -> "TableReadOptions":
+        if self.predicates is not None and len(self.predicates) == 0:
+            raise ValueError("table_read_options.predicates must be non-empty when set")
+
+        has_pred = self.predicates is not None and len(self.predicates) > 0
+        col = (self.partition_column or "").strip()
+        has_range = bool(col)
+
+        if has_pred and has_range:
+            raise ValueError(
+                "table_read_options: use either predicates or partition_column range mode, not both"
+            )
+        if has_range:
+            if self.num_partitions is None:
+                raise ValueError(
+                    "table_read_options.num_partitions is required when partition_column is set"
+                )
+            if self.lower_bound is None or self.upper_bound is None:
+                raise ValueError(
+                    "table_read_options.lower_bound and upper_bound are required when "
+                    "partition_column is set"
+                )
+        return self
+
+
 class ResourceConfig(BaseModel):
     """Configuration for a single ingest resource (REST, SDK, or future source types)."""
 
@@ -742,6 +818,14 @@ class ResourceConfig(BaseModel):
     database_select_query: Optional[str] = Field(
         default=None,
         description="Optional full SQL query for extract; when set, schema/table may still be used for logging.",
+    )
+    table_read_options: Optional[TableReadOptions] = Field(
+        default=None,
+        description=(
+            "Optional table read tuning (Spark JDBC partitioning, fetch size, logging). "
+            "Honored when the source service uses Spark read.jdbc; other database implementations "
+            "may reject this block until they support the same read path."
+        ),
     )
 
     def resolve_parameters(
@@ -983,6 +1067,11 @@ class SourceConfig(BaseModel):
             for resource_name, resource in self.resources.items():
                 if not resource.enabled:
                     continue
+                if resource.table_read_options is not None and self.type == SourceType.HANA:
+                    raise ValueError(
+                        f"{self.type.value} resource '{resource_name}' cannot use table_read_options "
+                        "until this source type reads via Spark JDBC (hana uses a different extract path today)"
+                    )
                 sch = (resource.database_schema or "").strip()
                 tbl = (resource.database_table or "").strip()
                 if not sch or not tbl:

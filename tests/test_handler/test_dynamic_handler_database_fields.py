@@ -34,7 +34,9 @@ class _FakeDbService:
     def close(self) -> None:
         return None
 
-    def extract_table(self, schema, table, select_query=None, spark_session=None):
+    def extract_table(
+        self, schema, table, select_query=None, spark_session=None, table_read_options=None
+    ):
         return self._spark.createDataFrame([(1, "x")], schema=["id", "label"])
 
 

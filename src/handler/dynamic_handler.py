@@ -1807,6 +1807,7 @@ class DynamicHandler(BaseHandler):
                     table=table,
                     select_query=resource_config.database_select_query,
                     spark_session=self.spark,
+                    table_read_options=resource_config.table_read_options,
                 )
                 if configured_fields:
                     fields = configured_fields

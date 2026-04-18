@@ -5,6 +5,7 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
+- [Spark JDBC read tuning (database resources)](#spark-jdbc-read-tuning-database-resources)
 
 ## Configuration Layout
 
@@ -71,3 +72,16 @@ sources:
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |
 | **PostgreSQL / HANA** | `type: postgresql` or `type: hana` with JDBC-style connection fields. PostgreSQL requires `database`. For HANA, `database` is the **tenant database name** passed to hdbcli as `databaseName` (must match a real tenant; errors such as `database '…' not connected` usually mean the wrong name). It can be omitted when your `host:port` already targets a single tenant. See [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml). |
+
+### Spark JDBC read tuning (database resources)
+
+Optional **`table_read_options`** describes **Spark `DataFrameReader.jdbc`** options: parallel range reads, predicate lists, JDBC `fetchSize`, and whether to run an exact `count()` after the read for logs. That matches sources whose service implementation reads through Spark JDBC (for example **PostgreSQL** in this repository).
+
+Other database source types may use a different read path (for example HANA today uses SQLAlchemy on the driver). For those, the same YAML block is **rejected at config validation until implemented** for that source type, so configuration stays portable without implying unsupported features are active.
+
+- **`fetch_size`**: optional JDBC `fetchSize` hint (positive integer) in Spark connection properties when the backend uses Spark JDBC.
+- **Range partitioning** (mutually exclusive with `predicates`): **`partition_column`**, **`lower_bound`**, **`upper_bound`**, **`num_partitions`**. Bounds are **operator-supplied** (Spine does not infer min/max). The column must suit Spark’s JDBC partitioner (typically an integer key).
+- **`predicates`**: non-empty list of `WHERE` fragments for predicate-based JDBC reads. Do not combine with range mode fields.
+- **`log_exact_row_count`**: when `true`, run `df.count()` after read for exact logging (extra scan). When `false` and a parallel read is configured, that count is skipped.
+
+Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block once they use the same Spark read path. See commented examples in [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml).

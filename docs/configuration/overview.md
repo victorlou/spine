@@ -5,6 +5,7 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
+- [Resource `response_key`](#resource-response_key)
 
 ## Configuration Layout
 

@@ -22,7 +22,7 @@ from src.auth.jwt_providers import get_provider
 from src.config.config_models import ResourceConfig, SourceConfig
 from src.config.settings import Settings
 from src.service.base_service import BaseSourceService, ServiceError
-from src.utils.data_utils import get_nested_value
+from src.utils.api_response import dict_response_key_to_records
 from src.utils.dynamic_values import get_resolver, resolve_headers_dict, resolve_request_body
 from src.utils.logger import REDACTED_PLACEHOLDER, get_logger, redact_text
 from src.utils.redis_context import RedisContextManager
@@ -765,8 +765,8 @@ class RestService(BaseSourceService):
 
                 # Handle response data extraction and return
                 if resource.response_key and isinstance(data, dict):
-                    result_data = get_nested_value(data, resource.response_key)
-                    if result_data is None:
+                    out, missing = dict_response_key_to_records(data, resource.response_key)
+                    if missing:
                         # For iteration scenarios, some combinations may have no data
                         # Return empty list instead of throwing error
                         self.logger.debug(
@@ -786,7 +786,7 @@ class RestService(BaseSourceService):
                             },
                         )
                         return []
-                    return [result_data] if not isinstance(result_data, list) else result_data
+                    return out
                 elif isinstance(data, list):
                     return data
                 else:

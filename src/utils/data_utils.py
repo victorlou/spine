@@ -34,9 +34,7 @@ def get_nested_value(data: Dict[str, Any], key_path: str, required: bool = False
         return None
 
 
-def dict_response_key_to_records(
-    data: Dict[str, Any], response_key: str
-) -> Tuple[List[Any], bool]:
+def dict_response_key_to_records(data: Dict[str, Any], response_key: str) -> Tuple[List[Any], bool]:
     """
     Extract records from a dict API payload using ``response_key`` (dot paths via ``get_nested_value``).
 

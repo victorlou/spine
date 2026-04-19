@@ -3,6 +3,7 @@
 ## Table of Contents
 
 - [Code Quality](#code-quality)
+- [Pre-commit (git hooks)](#pre-commit-git-hooks)
 - [Testing](#testing)
 - [Debugging](#debugging)
 - [Extending the Framework](#extending-the-framework)
@@ -33,11 +34,38 @@ GitHub Actions runs the same lint commands as above, installs dependencies with 
 
 See [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
-**Pre-commit hooks**
-```bash
-pre-commit install
-pre-commit run --all-files
-```
+### Pre-commit (git hooks)
+
+Pre-commit is optional locally, but useful so **`git commit`** runs the same checks as CI (Black, Ruff, yamllint) before your commit is created.
+
+**Important:** Hooks run only **when you run `git commit`**, not when you save files, stage files, or push. Nothing runs until you install the hook script into `.git/hooks/` (step 2 below).
+
+1. **Install dependencies** (includes the `pre-commit` package):
+
+   ```bash
+   uv sync --all-groups
+   ```
+
+2. **Install the Git hook once per clone** (writes `.git/hooks/pre-commit`). Run from the repository root:
+
+   ```bash
+   uv run pre-commit install
+   ```
+
+   If you prefer a classic venv session:
+
+   ```bash
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   pre-commit install
+   ```
+
+3. **Sanity check** (runs all hooks on the whole repo; optional but good after install):
+
+   ```bash
+   uv run pre-commit run --all-files
+   ```
+
+4. **Make a commit as usual.** If a hook fails, Git leaves your changes staged and does not create the commit until you fix the issues (or skip with `SKIP=hook-id git commit`, which is discouraged for routine use).
 
 **Auto-fix**
 ```bash

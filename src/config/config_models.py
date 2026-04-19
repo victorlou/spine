@@ -747,6 +747,11 @@ class TableReadOptions(BaseModel):
                     "table_read_options.lower_bound and upper_bound are required when "
                     "partition_column is set"
                 )
+            if self.lower_bound > self.upper_bound:
+                raise ValueError(
+                    "table_read_options.lower_bound must be less than or equal to upper_bound "
+                    "(Spark JDBC range partitioning)"
+                )
         return self
 
 

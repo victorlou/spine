@@ -42,6 +42,17 @@ def test_table_read_options_range_missing_bounds() -> None:
         TableReadOptions(partition_column="id", num_partitions=4)
 
 
+def test_table_read_options_range_rejects_inverted_bounds() -> None:
+    with pytest.raises(ValidationError) as exc:
+        TableReadOptions(
+            partition_column="id",
+            lower_bound=100,
+            upper_bound=1,
+            num_partitions=4,
+        )
+    assert "lower_bound" in str(exc.value).lower() and "upper_bound" in str(exc.value).lower()
+
+
 def test_table_read_options_empty_predicates() -> None:
     with pytest.raises(ValidationError):
         TableReadOptions(predicates=[])

@@ -92,6 +92,11 @@ class ConfigLoader:
             # Resolve relative paths in disk_config (relative to config file/directory)
             raw_config = self._resolve_disk_config_paths(raw_config, path_for_disk)
 
+            # Resolve relative local loading storage_root against operator config directory
+            raw_config = self._resolve_local_loading_storage_paths(
+                raw_config, config_path.resolve()
+            )
+
             # Process configuration
             processed_config = self._process_config(raw_config)
             processed_config["config_root"] = config_path.resolve()
@@ -300,6 +305,51 @@ class ConfigLoader:
                         # Only resolve if it's a relative path
                         if not Path(path).is_absolute():
                             disk_config["path"] = str(config_dir / path)
+
+        return config
+
+    def _resolve_local_loading_storage_paths(
+        self, config: Dict[str, Any], config_root: Path
+    ) -> Dict[str, Any]:
+        """
+        Resolve relative ``storage_root`` for ``destination: local`` loading configs.
+
+        Anchors to the operator config directory (same as ``PipelineConfig.config_root`` /
+        ``CONFIG_PATH``), not the process working directory.
+        """
+        root = config_root.resolve()
+
+        def resolve_loading_dict(loading: Dict[str, Any]) -> None:
+            if loading.get("destination") != "local":
+                return
+            sr = loading.get("storage_root")
+            if not isinstance(sr, str):
+                return
+            p = Path(sr).expanduser()
+            if p.is_absolute():
+                return
+            loading["storage_root"] = str((root / p).resolve())
+
+        defaults = config.get("defaults")
+        if isinstance(defaults, dict):
+            loading = defaults.get("loading")
+            if isinstance(loading, dict):
+                resolve_loading_dict(loading)
+
+        sources = config.get("sources", {})
+        if isinstance(sources, dict):
+            for _sn, source in sources.items():
+                if not isinstance(source, dict):
+                    continue
+                resources = source.get("resources", {})
+                if not isinstance(resources, dict):
+                    continue
+                for _rn, resource in resources.items():
+                    if not isinstance(resource, dict):
+                        continue
+                    loading = resource.get("loading")
+                    if isinstance(loading, dict):
+                        resolve_loading_dict(loading)
 
         return config
 

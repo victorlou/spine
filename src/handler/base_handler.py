@@ -5,12 +5,14 @@ Base handler class providing common orchestration functionality.
 import time
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
 from src.loader.base_loader import BaseLoader
+from src.loader.local_storage import check_local_storage_root
 from src.utils.exceptions import HandlerError, SparkError
 from src.utils.logger import get_logger
 from src.utils.spark_manager import SparkManager
@@ -120,6 +122,18 @@ class BaseHandler(ABC):
             if not isinstance(e, HandlerError):
                 raise HandlerError.from_error(e, "S3 connectivity test failed") from e
             raise
+
+    def _test_local_storage_writable(self, storage_root: str) -> None:
+        """
+        Verify local filesystem loading root exists as a directory and is writable.
+
+        Args:
+            storage_root: Resolved filesystem path from loading configuration
+
+        Raises:
+            HandlerError: If the path is not a writable directory
+        """
+        check_local_storage_root(Path(storage_root))
 
     def with_retry(
         self,

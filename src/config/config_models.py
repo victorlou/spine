@@ -811,7 +811,7 @@ class ResourceConfig(BaseModel):
         description="Configuration to ensure all parameter values are present in the output dataframe",
     )
 
-    # Relational database extract target (used when source type is postgresql or hana)
+    # Relational database extract target (used when source type is a database kind)
     database_schema: Optional[str] = Field(
         default=None,
         description="Database schema for JDBC/HANA extract (required for database source types on this resource).",
@@ -1016,6 +1016,17 @@ class SourceType(StrEnum):
     HANA = "hana"
 
 
+def is_database_source_type(source_type: SourceType) -> bool:
+    """
+    Return True for source kinds that use the relational database extract path
+    (single table or query read per resource run, shared request-context rules).
+
+    Add new database ``SourceType`` values here when wiring a backend through the
+    same planner and handler behavior.
+    """
+    return source_type in (SourceType.POSTGRESQL, SourceType.HANA)
+
+
 class SourceConfig(BaseModel):
     """Data source configuration."""
 
@@ -1029,7 +1040,7 @@ class SourceConfig(BaseModel):
     )
     resources: Dict[str, ResourceConfig]
 
-    # Relational database connection (postgresql / hana)
+    # Relational database connection (see ``is_database_source_type`` for supported kinds)
     host: Optional[str] = Field(default=None, description="Database host")
     port: Optional[Union[int, str]] = Field(default=None, description="Database port")
     username: Optional[str] = Field(default=None, description="Database user")
@@ -1047,10 +1058,6 @@ class SourceConfig(BaseModel):
         description="Extra JDBC properties or URL query parameters (driver-specific).",
     )
 
-    @staticmethod
-    def _is_database_source(t: SourceType) -> bool:
-        return t in (SourceType.POSTGRESQL, SourceType.HANA)
-
     @model_validator(mode="after")
     def validate_source_type(self):
         """Validate that source type matches required fields."""
@@ -1060,7 +1067,7 @@ class SourceConfig(BaseModel):
         elif self.type == SourceType.PYTHON_SDK:
             if not self.sdk:
                 raise ValueError("sdk configuration is required for python_sdk source type")
-        elif self._is_database_source(self.type):
+        elif is_database_source_type(self.type):
             if not self.host:
                 raise ValueError(f"{self.type.value} source requires host")
             if self.port is None or str(self.port).strip() == "":

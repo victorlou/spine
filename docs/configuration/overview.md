@@ -5,11 +5,8 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
-<<<<<<< HEAD
 - [Spark JDBC read tuning (database resources)](#spark-jdbc-read-tuning-database-resources)
-=======
 - [Database resources and request contexts](#database-resources-and-request-contexts)
->>>>>>> origin/dev
 
 ## Configuration Layout
 
@@ -92,8 +89,9 @@ Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block 
 
 ### Database resources and request contexts
 
-For PostgreSQL and HANA resources, Spine reads the configured table (or `database_select_query`) **once per resource run**, regardless of how many [request contexts](parameters.md) batching or backfill produces. Request contexts still drive REST/SDK calls; they do **not** cause repeated `SELECT`-style extracts of the same static query.
+For **database-backed** resources (relational sources configured with `database_schema` / `database_table` or `database_select_query`), Spine reads the configured table or query **once per resource run**. [Request contexts](parameters.md) from `batch_inputs` and related expansion drive REST/SDK calls on other source types; on database resources they do not cause repeated `SELECT`-style extracts of the same static query.
 
-- **Why:** The handler does not substitute per-context values into `database_schema`, `database_table`, or `database_select_query` today. Running one extract avoids duplicate database load and avoids duplicating identical rows in Spark when `request_contexts` has length greater than one.
-- **Transformations:** When transformations run on database-sourced DataFrames, the request context passed in is taken from **`request_contexts[0]`** (first context after expansion). Design batch inputs and transforms accordingly.
+- **Rejection:** If expansion would produce **more than one** request context for a database-backed resource, Spine **fails before ingest** when that is provable from static batch configuration (execution plan build). If batch values are resolved only at run time (for example from other resources), the handler **still raises** after expansion (after any `record_limit` on contexts) and before the extract. Only the first context would influence transformations otherwise. Fix the pipeline by removing batch expansion for that resource, using a single context (for example via `record_limit`), or splitting work into separate resources.
+- **Why:** The handler does not substitute per-context values into `database_schema`, `database_table`, or `database_select_query` today. A single extract avoids duplicate database load and avoids duplicating identical rows in Spark.
+- **Transformations:** When transformations run on database-sourced DataFrames, the request context passed in is taken from **`request_contexts[0]`** (the sole context after a successful run). Design transforms for that single context.
 - **Scoping data:** To limit which rows are read, set **`database_select_query`** to the SQL you need (static query in YAML). Per-context or templated SQL is not supported yet; if you need different extracts per context, split into separate resources or follow future docs for SQL templating.

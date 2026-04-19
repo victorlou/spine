@@ -221,7 +221,7 @@ class ConfigLoader:
             "auth",
             "headers",
             "resources",
-            # Relational database sources (postgresql / hana)
+            # Relational database-backed sources (see is_database_source_type)
             "host",
             "port",
             "username",

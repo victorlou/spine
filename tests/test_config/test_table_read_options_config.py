@@ -1,4 +1,4 @@
-"""Tests for ``TableReadOptions`` and source validation (issue #10)."""
+"""Tests for ``TableReadOptions`` and related source validation."""
 
 import pytest
 from pydantic import ValidationError

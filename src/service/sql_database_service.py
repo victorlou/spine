@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from pyspark.sql import DataFrame, SparkSession
 
-from src.config.config_models import SourceConfig
+from src.config.config_models import SourceConfig, TableReadOptions
 from src.config.settings import Settings
 from src.service.base_service import BaseSourceService
 from src.utils.exceptions import ServiceError
@@ -118,6 +118,7 @@ class SqlDatabaseService(BaseSourceService, ABC):
         schema: str,
         table: str,
         select_query: Optional[str],
+        table_read_options: Optional[TableReadOptions] = None,
     ) -> DataFrame:
         """Backend-specific read into a Spark DataFrame."""
 
@@ -127,6 +128,7 @@ class SqlDatabaseService(BaseSourceService, ABC):
         table: str,
         select_query: Optional[str] = None,
         spark_session: Optional[Any] = None,
+        table_read_options: Optional[TableReadOptions] = None,
     ) -> DataFrame:
         spark_session = self._require_spark(spark_session, operation="extract_table")
         self._ensure_extract_prerequisites()
@@ -147,13 +149,40 @@ class SqlDatabaseService(BaseSourceService, ABC):
                     extra_fields=fields,
                 )
 
-            df = self._load_dataframe(spark_session, schema, table, select_query)
-
-            row_count = df.count()
-            logger.info(
-                f"Successfully extracted {row_count} rows from '{table_label}'",
-                extra_fields={**fields, "row_count": row_count},
+            df = self._load_dataframe(
+                spark_session,
+                schema,
+                table,
+                select_query,
+                table_read_options=table_read_options,
             )
+
+            extra_log: Dict[str, Any] = {**fields}
+            if table_read_options is not None:
+                if table_read_options.fetch_size is not None:
+                    extra_log["fetch_size"] = table_read_options.fetch_size
+                if table_read_options.predicates:
+                    extra_log["predicates_count"] = len(table_read_options.predicates)
+                if (table_read_options.partition_column or "").strip():
+                    extra_log["partition_column"] = table_read_options.partition_column.strip()
+                    extra_log["num_partitions"] = table_read_options.num_partitions
+
+            should_count = True
+            if table_read_options is not None and table_read_options.uses_parallel_read():
+                should_count = table_read_options.log_exact_row_count
+
+            if should_count:
+                row_count = df.count()
+                logger.info(
+                    f"Successfully extracted {row_count} rows from '{table_label}'",
+                    extra_fields={**extra_log, "row_count": row_count},
+                )
+            else:
+                logger.info(
+                    f"Successfully extracted from '{table_label}' (parallel JDBC read; "
+                    f"exact row count skipped; set table_read_options.log_exact_row_count to count)",
+                    extra_fields=extra_log,
+                )
             return df
 
         except ServiceError:

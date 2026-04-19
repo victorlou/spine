@@ -4,7 +4,7 @@ from typing import Optional
 
 from pyspark.sql import DataFrame, SparkSession
 
-from src.config.config_models import SourceConfig, SourceType
+from src.config.config_models import SourceConfig, SourceType, TableReadOptions
 from src.config.settings import Settings
 from src.service.sql_database_service import SqlDatabaseService
 from src.utils.exceptions import ServiceError
@@ -64,6 +64,7 @@ class PostgresService(SqlDatabaseService):
         schema: str,
         table: str,
         select_query: Optional[str],
+        table_read_options: Optional[TableReadOptions] = None,
     ) -> DataFrame:
         jdbc_url = self._build_jdbc_url()
         table_ref = self._table_label_for_log(schema, table)
@@ -81,8 +82,29 @@ class PostgresService(SqlDatabaseService):
         if self.config.connection_params:
             for k, v in self.config.connection_params.items():
                 connection_properties[str(k)] = str(v)
+        if table_read_options is not None and table_read_options.fetch_size is not None:
+            connection_properties["fetchsize"] = str(table_read_options.fetch_size)
 
-        return spark_session.read.jdbc(
+        reader = spark_session.read
+        if table_read_options is not None and table_read_options.predicates:
+            return reader.jdbc(
+                url=jdbc_url,
+                table=query,
+                predicates=table_read_options.predicates,
+                properties=connection_properties,
+            )
+        if table_read_options is not None and (table_read_options.partition_column or "").strip():
+            col = table_read_options.partition_column.strip()
+            return reader.jdbc(
+                url=jdbc_url,
+                table=query,
+                column=col,
+                lowerBound=table_read_options.lower_bound,
+                upperBound=table_read_options.upper_bound,
+                numPartitions=table_read_options.num_partitions,
+                properties=connection_properties,
+            )
+        return reader.jdbc(
             url=jdbc_url,
             table=query,
             properties=connection_properties,

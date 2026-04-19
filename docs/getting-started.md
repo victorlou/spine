@@ -60,7 +60,7 @@ For active development: customizing configs, debugging, or contributing.
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Java 17** (required for Spark)
 - Redis 7.0+ (for context management)
 - AWS credentials (for S3 access)
@@ -90,8 +90,16 @@ For active development: customizing configs, debugging, or contributing.
 
 3. **Install Python dependencies**
    ```bash
-   pip install -r requirements.txt
+   uv sync --all-groups
    ```
+
+   **Activate the environment** (uv creates `.venv` in the repo root):
+
+   ```bash
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   ```
+
+   If you skip activation, prefix commands with `uv run` (for example `uv run python -m src.main`) so they use that project venv instead of whatever `python` is first on your `PATH`.
 
 4. **Install and start Redis**
 
@@ -133,6 +141,8 @@ For active development: customizing configs, debugging, or contributing.
 ---
 
 ## Usage
+
+The examples below assume **`.venv` is activated** (`source .venv/bin/activate`; on Windows, `.venv\Scripts\activate`) after `uv sync --all-groups`. Otherwise use `uv run python -m src.main …` in place of `python -m src.main …`.
 
 **Show execution plan** (recommended first step)
 ```bash

@@ -5,11 +5,8 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
-<<<<<<< HEAD
 - [Spark JDBC read tuning (database resources)](#spark-jdbc-read-tuning-database-resources)
-=======
 - [Database resources and request contexts](#database-resources-and-request-contexts)
->>>>>>> origin/dev
 
 ## Configuration Layout
 

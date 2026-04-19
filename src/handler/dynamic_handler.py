@@ -1826,16 +1826,6 @@ class DynamicHandler(BaseHandler):
             )
             extract_invocations = 1
 
-            self.logger.info(
-                "Database extract dataframe built",
-                extra_fields={
-                    "resource_name": resource_meta.resource_name,
-                    "source": resource_meta.source_name,
-                    "request_context_count": request_context_count,
-                    "extract_invocations": extract_invocations,
-                },
-            )
-
             if configured_fields:
                 fields = configured_fields
             else:
@@ -1860,6 +1850,15 @@ class DynamicHandler(BaseHandler):
                         },
                     )
                 select_cols.append(col(f.source).cast("string").alias(f.name))
+            self.logger.info(
+                "Database extract dataframe built",
+                extra_fields={
+                    "resource_name": resource_meta.resource_name,
+                    "source": resource_meta.source_name,
+                    "request_context_count": request_context_count,
+                    "extract_invocations": extract_invocations,
+                },
+            )
             return df.select(*select_cols)
         finally:
             service.close()

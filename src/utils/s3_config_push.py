@@ -19,6 +19,8 @@ from typing import Iterable, Iterator, Tuple
 import boto3
 from botocore.exceptions import ClientError
 
+from src.config.repository_root import repository_root
+
 __all__ = ["iter_operator_config_files", "parse_s3_uri", "push_config_to_s3"]
 
 _EXCLUDED_BASENAMES = {"README.md", ".gitkeep"}
@@ -26,10 +28,6 @@ _INCLUDED_SUBTREES: tuple[tuple[str, str], ...] = (
     ("sources/", ".yml"),
     ("queries/", ".sql"),
 )
-
-
-def _repository_root() -> Path:
-    return Path(__file__).resolve().parents[2]
 
 
 def resolve_local_config_root(config_path: str | None = None) -> Path:
@@ -41,7 +39,7 @@ def resolve_local_config_root(config_path: str | None = None) -> Path:
     p = Path(raw)
     if p.is_absolute():
         return p.resolve()
-    return (_repository_root() / "config" / p).resolve()
+    return (repository_root() / "config" / p).resolve()
 
 
 def parse_s3_uri(uri: str) -> Tuple[str, str]:

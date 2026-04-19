@@ -53,6 +53,9 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Local Spark loading output (see docs/configuration/loading.md)
+.spine/local-output/
+
 # Temp
 .temp/
 .write_test/

@@ -42,9 +42,9 @@ class RetryConfig(BaseModel):
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
-    For S3 destinations, prefix must be specified and should follow the pattern:
+    For S3 and local destinations, prefix must be specified and should follow the pattern:
     'source_name/resource_name' (e.g., 'my_source/users').
-    The actual data will be stored in a 'data' subdirectory under this prefix.
+    For S3, the actual Parquet data will be stored in a 'data' subdirectory under this prefix.
 
     Save modes for Delta format:
     - **overwrite** (default): Replace all existing data in the table
@@ -61,7 +61,15 @@ class LoadingConfig(BaseModel):
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
     compression: Optional[str] = "snappy"
     bucket: Optional[str] = None  # For S3, can be inherited from defaults
-    prefix: Optional[str] = None  # For S3, required if destination is 's3'
+    prefix: Optional[str] = None  # For S3/local, required for those destinations
+    storage_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filesystem directory for destination: local (Spark file://). "
+            "May be relative to the repository root (directory containing ``src/``); "
+            "ConfigLoader resolves it before validation."
+        ),
+    )
     merge_keys: Optional[List[str]] = Field(
         default=None,
         description="List of column names to use as primary keys for merge operations. Required when write_mode is 'merge'.",
@@ -74,11 +82,11 @@ class LoadingConfig(BaseModel):
     @field_validator("prefix")
     @classmethod
     def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate prefix format for S3 destinations."""
-        # Only validate if this is an S3 destination
-        if info.data.get("destination") == "s3":
+        """Validate prefix format for S3 and local filesystem destinations."""
+        dest = info.data.get("destination")
+        if dest in ("s3", "local"):
             if not v:
-                raise ValueError("prefix is required for S3 destinations")
+                raise ValueError(f"prefix is required for {dest} destinations")
 
             # Remove any leading/trailing slashes
             v = v.strip("/")
@@ -87,7 +95,7 @@ class LoadingConfig(BaseModel):
             parts = v.split("/")
             if len(parts) < 2:
                 raise ValueError(
-                    "S3 prefix must follow the pattern 'source_name/resource_name' "
+                    "prefix must follow the pattern 'source_name/resource_name' "
                     "(e.g., 'my_source/users')"
                 )
 
@@ -97,15 +105,6 @@ class LoadingConfig(BaseModel):
                     "prefix should not include 'data' directory - it will be automatically appended"
                 )
 
-        return v
-
-    @field_validator("bucket")
-    @classmethod
-    def validate_bucket(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate bucket is present for S3 destinations."""
-        if info.data.get("destination") == "s3":
-            if not v:
-                raise ValueError("bucket is required for S3 destination")
         return v
 
     @model_validator(mode="after")
@@ -127,6 +126,17 @@ class LoadingConfig(BaseModel):
                 )
             if len(self.merge_keys) == 0:
                 raise ValueError("merge_keys must be a non-empty list when write_mode is 'merge'.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_destination_storage_fields(self) -> "LoadingConfig":
+        """Require bucket (S3) or storage_root (local); runs after merge_keys check."""
+        if self.destination == "s3":
+            if not self.bucket:
+                raise ValueError("bucket is required for S3 destination")
+        elif self.destination == "local":
+            if not self.storage_root:
+                raise ValueError("storage_root is required for local destination")
         return self
 
     model_config = {"validate_assignment": True}
@@ -999,10 +1009,14 @@ class ResourceConfig(BaseModel):
 
         super().__init__(**data)
 
-        # Validate S3 configuration (only if loading is configured)
+        # Validate loading destination fields (only if loading is configured)
         if self.loading and self.loading.destination == "s3" and not self.loading.bucket:
             raise ValueError(
                 "bucket is required for S3 destination (either in defaults or resource configuration)"
+            )
+        if self.loading and self.loading.destination == "local" and not self.loading.storage_root:
+            raise ValueError(
+                "storage_root is required for local destination (either in defaults or resource configuration)"
             )
 
 
@@ -1201,16 +1215,25 @@ class StreamingConfig(BaseModel):
 
 
 class DefaultsConfig(BaseModel):
-    """Default configuration values."""
+    """Default configuration values. See ``config/defaults.example.yml`` for a full operator template."""
 
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
     )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(
-            destination="s3", format="parquet", compression="snappy"
+            destination="local",
+            format="delta",
+            write_mode="overwrite",
+            compression="snappy",
+            storage_root=".spine/local-output",
+            prefix="default/output",
         ),
-        description="Default loading configuration",
+        description=(
+            "Default loading when ``defaults.loading`` is omitted from YAML: local Delta under "
+            "``.spine/local-output`` (relative to the repository root, next to ``config/`` in a normal checkout) "
+            "with placeholder prefix; override for S3 or real paths."
+        ),
     )
     context: ContextConfig = Field(
         default_factory=ContextConfig, description="Context management configuration"

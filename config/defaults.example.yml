@@ -6,12 +6,28 @@ defaults:
     initial_delay: 1
     backoff_factor: 2
 
+  # Default loading: local Delta; relative storage_root resolves under the repository
+  #   root (dir containing src/), e.g. repo/.spine/local-output (gitignored).
+  # Override per resource if needed, or replace this block with S3 (see commented example below).
   loading:
-    destination: "s3"
+    destination: "local"
     format: "delta"
     write_mode: "overwrite"
     compression: "snappy"
-    bucket: "${S3_INGESTION_BUCKET}"
+    storage_root: ".spine/local-output"
+    prefix: "default/output"
+
+  # For Amazon S3 instead, use something like:
+  # loading:
+  #   destination: "s3"
+  #   format: "delta"
+  #   write_mode: "overwrite"
+  #   compression: "snappy"
+  #   bucket: "${S3_INGESTION_BUCKET}"
+  #   prefix: "my_source/my_resource"
+  #
+  # If a resource sets only bucket/prefix, set destination: "s3" on that resource (or here
+  # in defaults) so it does not inherit destination: local from defaults.
 
   context:
     type: "redis"

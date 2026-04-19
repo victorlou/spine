@@ -12,7 +12,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - `src/service/`: source integrations such as REST, relational database connectors, and Python SDK services
 - `src/parser/`: lightweight transformations over collected data
 - `src/collector/`: collection/storage strategy during extraction
-- `src/loader/`: destination loading such as S3
+- `src/loader/`: destination loading (S3, local, …), Spark writes, and `object_store` / `local_storage` helpers
 - `config/`: operator-local YAML and SQL; committed files here are templates and examples
 
 ## Working Rules
@@ -53,6 +53,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 
 - Keep the `README.md` practical and honest. Personality is fine, but claims should match the implementation.
 - Use `docs/getting-started.md`, `docs/deployment.md`, and `docs/configuration/` as the source of truth for setup and behavior details.
+- Write for someone discovering the project for the first time. Prefer direct, timeless descriptions of behavior and configuration. Avoid framing docs around past releases or repo history (for example “unchanged from earlier versions”, “previously”, “now you can”) unless you are explicitly documenting a breaking migration or upgrade path.
 
 ## GitHub issues
 

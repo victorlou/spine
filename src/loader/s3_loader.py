@@ -14,6 +14,7 @@ from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig
 from src.loader.base_loader import BaseLoader, LoaderError
+from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.logger import get_logger
 
 
@@ -46,12 +47,13 @@ def retry_on_s3_error(max_retries: int = 3, delay: float = 1.0):
 
 
 class S3Loader(BaseLoader):
-    """Loader for AWS S3 destinations using Spark."""
+    """Loader for object storage destinations (S3, local, …) using Spark and Hadoop FileSystem."""
 
     def __init__(self):
         """Initialize the S3 loader."""
         super().__init__()
         self.spark = None
+        self._object_store: Optional[SparkFilesystemObjectStore] = None
 
     def set_spark_session(self, spark: SparkSession) -> None:
         """
@@ -61,25 +63,13 @@ class S3Loader(BaseLoader):
             spark: SparkSession to use
         """
         self.spark = spark
+        self._object_store = SparkFilesystemObjectStore(spark) if spark is not None else None
 
-    def _get_s3_filesystem(self, bucket: str):
-        """
-        Get S3 filesystem instance.
-
-        Args:
-            bucket: S3 bucket name
-
-        Returns:
-            Tuple[FileSystem, Configuration]: S3 filesystem and Hadoop configuration
-        """
-        if not self.spark:
+    @property
+    def object_store(self) -> SparkFilesystemObjectStore:
+        if not self.spark or not self._object_store:
             raise LoaderError("Spark session not set. Call set_spark_session first.")
-
-        hadoop_conf = self.spark.sparkContext._jsc.hadoopConfiguration()
-        fs = self.spark.sparkContext._jvm.org.apache.hadoop.fs.FileSystem.get(
-            self.spark.sparkContext._jvm.java.net.URI(f"s3a://{bucket}"), hadoop_conf
-        )
-        return fs, hadoop_conf
+        return self._object_store
 
     def _format_prefix(self, prefix: Optional[str]) -> str:
         """
@@ -99,40 +89,43 @@ class S3Loader(BaseLoader):
         clean_prefix = prefix.strip("/")
         return f"{clean_prefix}/data"
 
-    def _generate_temp_path(self, bucket: str, prefix: str, key: str) -> str:
+    def _generate_temp_path(self, base_uri: str, prefix: str, key: str) -> str:
         """
         Generate temporary path for initial write.
 
         Args:
-            bucket: S3 bucket name
+            base_uri: Filesystem base URI (e.g. s3a://bucket or file:///path)
             prefix: Key prefix
             key: Final key name
 
         Returns:
-            str: Temporary S3 path
+            str: Temporary path URI
         """
         clean_prefix = self._format_prefix(prefix)
-        return f"s3a://{bucket}/{clean_prefix}/_temp/spark_writes/{key}"
+        return self.object_store.resolve_path(
+            base_uri, clean_prefix, "_temp", "spark_writes", key, trailing_slash=False
+        )
 
     def _generate_final_path(
-        self, bucket: str, prefix: str, extension: str = "parquet"
+        self, base_uri: str, prefix: str, extension: str = "parquet"
     ) -> Tuple[str, str]:
         """
-        Generate final S3 path with timestamp and UUID for file-based formats (e.g., Parquet).
+        Generate final path with timestamp and UUID for file-based formats (e.g., Parquet).
 
         Args:
-            bucket: S3 bucket name
+            base_uri: Filesystem base URI
             prefix: Key prefix
             extension: File extension
 
         Returns:
-            tuple[str, str]: Final S3 path and key
+            tuple[str, str]: Final path URI and key
         """
         timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
         unique_id = str(uuid.uuid4())
         clean_prefix = self._format_prefix(prefix)
         key = f"{timestamp}_{unique_id}.{extension}"
-        return f"s3a://{bucket}/{clean_prefix}/{key}", key
+        final = self.object_store.resolve_path(base_uri, clean_prefix, key)
+        return final, key
 
     def _get_source_type_prefix(self, source_type: Optional[str]) -> str:
         """
@@ -190,7 +183,7 @@ class S3Loader(BaseLoader):
             return source_type_prefix
 
     def _generate_delta_path(
-        self, bucket: str, prefix: str, source_type: Optional[str] = None
+        self, base_uri: str, prefix: str, source_type: Optional[str] = None
     ) -> str:
         """
         Generate Delta table path (directory-based, not file-based).
@@ -201,7 +194,7 @@ class S3Loader(BaseLoader):
         The source type prefix is prepended automatically.
 
         Args:
-            bucket: S3 bucket name
+            base_uri: Filesystem base URI
             prefix: Key prefix
             source_type: Optional source type to prepend to the path
 
@@ -217,7 +210,9 @@ class S3Loader(BaseLoader):
         else:
             clean_prefix = full_prefix.strip("/")
         # Delta tables are directories, so we return the directory path
-        return f"s3a://{bucket}/{clean_prefix}/" if clean_prefix else f"s3a://{bucket}/"
+        if clean_prefix:
+            return self.object_store.resolve_path(base_uri, clean_prefix, trailing_slash=True)
+        return self.object_store.resolve_path(base_uri, trailing_slash=True)
 
     def _ensure_dataframe(
         self, data: Union[DataFrame, List[Dict[str, Any]]], schema: Optional[StructType] = None
@@ -378,33 +373,28 @@ class S3Loader(BaseLoader):
 
         writer.save(path)
 
-    def _cleanup_temp_dir(self, fs, temp_path: str) -> None:
+    def _cleanup_temp_dir(self, store: SparkFilesystemObjectStore, temp_path: str) -> None:
         """
         Clean up temporary directory structure.
         Deletes the temp write directory and its parent directories if empty.
 
         Args:
-            fs: Hadoop FileSystem instance
-            temp_path: Path to temporary directory
+            store: Object store for delete/exists checks
+            temp_path: Path to temporary directory (URI string)
         """
         try:
             jvm = self.spark.sparkContext._jvm
             temp_path_obj = jvm.org.apache.hadoop.fs.Path(temp_path)
 
-            # Delete temp write directory
-            fs.delete(temp_path_obj, True)
+            store.delete(temp_path, recursive=True)
 
-            # Delete parent directories if empty
-            spark_writes = temp_path_obj.getParent()
-            temp_dir = spark_writes.getParent()
+            spark_writes = str(temp_path_obj.getParent().toString())
+            temp_dir = str(temp_path_obj.getParent().getParent().toString())
 
-            # Check and delete spark_writes directory
-            if fs.exists(spark_writes) and len(fs.listStatus(spark_writes)) == 0:
-                fs.delete(spark_writes, True)
-
-                # Check and delete _temp directory if empty
-                if fs.exists(temp_dir) and len(fs.listStatus(temp_dir)) == 0:
-                    fs.delete(temp_dir, True)
+            if store.is_empty_directory(spark_writes):
+                store.delete(spark_writes, recursive=True)
+                if store.is_empty_directory(temp_dir):
+                    store.delete(temp_dir, recursive=True)
 
             self.logger.trace(
                 "Cleaned up temporary directories", extra_fields={"temp_path": temp_path}
@@ -417,10 +407,9 @@ class S3Loader(BaseLoader):
             )
 
     @retry_on_s3_error()
-    def _move_file(self, fs, src_path, dst_path) -> None:
+    def _move_uri(self, store: SparkFilesystemObjectStore, src_uri: str, dst_uri: str) -> None:
         """Move file from temp to final location with retry logic."""
-        if not fs.rename(src_path, dst_path):
-            raise LoaderError(f"Failed to move file from {src_path} to {dst_path}")
+        store.move(src_uri, dst_uri)
 
     def load(
         self,
@@ -451,13 +440,20 @@ class S3Loader(BaseLoader):
         if not self.spark:
             raise LoaderError("Spark session not set. Call set_spark_session first.")
 
-        if not config.bucket:
-            raise LoaderError("S3 bucket must be specified in configuration")
+        try:
+            base_uri = loading_base_uri(
+                destination=config.destination,
+                bucket=config.bucket,
+                storage_root=config.storage_root,
+            )
+        except ValueError as e:
+            raise LoaderError(str(e)) from e
 
         self.logger.debug(
-            "Starting S3 data load",
+            "Starting object store data load",
             extra_fields={
-                "bucket": config.bucket,
+                "destination": config.destination,
+                "base_uri": base_uri,
                 "format": config.format,
                 "write_mode": config.write_mode,
                 "input_type": type(data).__name__,
@@ -478,10 +474,14 @@ class S3Loader(BaseLoader):
         # Branch based on format type
         if config.format == "delta":
             # Delta format: write directly to final directory location
-            return self._load_delta(df, config, source_type=source_type, **kwargs)
+            return self._load_delta(
+                df, config, base_uri=base_uri, source_type=source_type, **kwargs
+            )
         else:
             # Parquet or other file-based formats: use existing file-based logic
-            return self._load_file_based(df, config, source_type=source_type, **kwargs)
+            return self._load_file_based(
+                df, config, base_uri=base_uri, source_type=source_type, **kwargs
+            )
 
     def _delta_table_exists(self, path: str) -> bool:
         """
@@ -491,7 +491,7 @@ class S3Loader(BaseLoader):
         for a valid Delta table.
 
         Args:
-            path: S3 path to the Delta table
+            path: URI path to the Delta table
 
         Returns:
             bool: True if Delta table exists, False otherwise
@@ -504,19 +504,9 @@ class S3Loader(BaseLoader):
                 )
                 return False
 
-            # Check if _delta_log directory exists (required for Delta table)
-            # Delta tables always have a _delta_log directory
-            jvm = self.spark.sparkContext._jvm
-            delta_log_path = jvm.org.apache.hadoop.fs.Path(f"{path}/_delta_log")
-
-            # Get filesystem for the path
-            hadoop_conf = self.spark.sparkContext._jsc.hadoopConfiguration()
-            uri = jvm.java.net.URI(path)
-            fs = jvm.org.apache.hadoop.fs.FileSystem.get(uri, hadoop_conf)
-
-            # Check if _delta_log directory exists
-            exists = fs.exists(delta_log_path)
-            return exists
+            store = self.object_store
+            delta_log = store.resolve_path(path.rstrip("/"), "_delta_log")
+            return store.exists(delta_log)
 
         except Exception as e:
             # If any error occurs, assume table doesn't exist
@@ -543,16 +533,27 @@ class S3Loader(BaseLoader):
 
         Returns:
             True if the Delta table exists at the configured path, False otherwise.
-            Returns False if destination is not s3, format is not delta, or bucket/prefix missing.
+            Returns False if destination is not object-store backed, format is not delta,
+            or required path fields are missing.
         """
-        if config.destination != "s3" or config.format != "delta":
+        if config.destination not in ("s3", "local") or config.format != "delta":
             return False
-        if not config.bucket or not config.prefix:
+        if config.destination == "s3" and (not config.bucket or not config.prefix):
+            return False
+        if config.destination == "local" and (not config.storage_root or not config.prefix):
             return False
         if not self.spark:
             return False
+        try:
+            base_uri = loading_base_uri(
+                destination=config.destination,
+                bucket=config.bucket,
+                storage_root=config.storage_root,
+            )
+        except ValueError:
+            return False
         path = self._generate_delta_path(
-            bucket=config.bucket,
+            base_uri=base_uri,
             prefix=config.prefix,
             source_type=source_type,
         )
@@ -803,7 +804,13 @@ class S3Loader(BaseLoader):
             raise LoaderError(error_msg) from e
 
     def _load_delta(
-        self, df: DataFrame, config: LoadingConfig, source_type: Optional[str] = None, **kwargs
+        self,
+        df: DataFrame,
+        config: LoadingConfig,
+        *,
+        base_uri: str,
+        source_type: Optional[str] = None,
+        **kwargs,
     ) -> str:
         """
         Load data as Delta table to S3 with support for multiple save modes.
@@ -848,11 +855,11 @@ class S3Loader(BaseLoader):
             # For Delta, we use the prefix directly without "data/" suffix
             # Source type prefix is automatically prepended
             final_path = self._generate_delta_path(
-                bucket=config.bucket, prefix=config.prefix, source_type=source_type
+                base_uri=base_uri, prefix=config.prefix, source_type=source_type
             )
 
             self.logger.trace(
-                "Writing Delta table to S3",
+                "Writing Delta table",
                 extra_fields={
                     "delta_path": final_path,
                     "write_mode": config.write_mode,
@@ -928,7 +935,7 @@ class S3Loader(BaseLoader):
                 self._write_dataframe(df, final_path, write_options)
 
             self.logger.info(
-                "Successfully loaded Delta table to S3",
+                "Successfully loaded Delta table",
                 extra_fields={
                     "destination": final_path,
                     "write_mode": config.write_mode,
@@ -939,12 +946,12 @@ class S3Loader(BaseLoader):
             return final_path
 
         except Exception as e:
-            error_msg = f"Failed to load Delta table to S3: {e!s}"
+            error_msg = f"Failed to load Delta table: {e!s}"
             self.logger.error(
                 error_msg,
                 extra_fields={
                     "error": str(e),
-                    "bucket": config.bucket,
+                    "destination": config.destination,
                     "prefix": config.prefix,
                     "write_mode": config.write_mode,
                 },
@@ -952,7 +959,13 @@ class S3Loader(BaseLoader):
             raise LoaderError(error_msg) from e
 
     def _load_file_based(
-        self, df: DataFrame, config: LoadingConfig, source_type: Optional[str] = None, **kwargs
+        self,
+        df: DataFrame,
+        config: LoadingConfig,
+        *,
+        base_uri: str,
+        source_type: Optional[str] = None,
+        **kwargs,
     ) -> str:
         """
         Load data as file-based format (e.g., Parquet) to S3.
@@ -974,12 +987,10 @@ class S3Loader(BaseLoader):
 
             # Generate paths for file-based format
             final_path, key = self._generate_final_path(
-                bucket=config.bucket, prefix=prefixed_prefix, extension=config.format
+                base_uri=base_uri, prefix=prefixed_prefix, extension=config.format
             )
 
-            temp_path = self._generate_temp_path(
-                bucket=config.bucket, prefix=prefixed_prefix, key=key
-            )
+            temp_path = self._generate_temp_path(base_uri=base_uri, prefix=prefixed_prefix, key=key)
 
             # Prepare write options
             write_options = {
@@ -1003,34 +1014,25 @@ class S3Loader(BaseLoader):
 
             # Move file to final location
             try:
-                fs, _ = self._get_s3_filesystem(config.bucket)
-
-                # Find the part file
-                temp_files = fs.globStatus(
-                    self.spark.sparkContext._jvm.org.apache.hadoop.fs.Path(f"{temp_path}/part-*")
-                )
-
-                if not temp_files or len(temp_files) == 0:
+                store = self.object_store
+                part_uri = store.glob_first_part_file(temp_path)
+                if not part_uri:
                     raise LoaderError(f"No part file found in temporary location: {temp_path}")
-
-                # Move the file
-                src_path = temp_files[0].getPath()
-                dst_path = self.spark.sparkContext._jvm.org.apache.hadoop.fs.Path(final_path)
 
                 self.logger.debug(
                     "Moving file to final location", extra_fields={"destination": final_path}
                 )
 
-                self._move_file(fs, src_path, dst_path)
+                self._move_uri(store, part_uri, final_path)
 
                 # Clean up temp directory
-                self._cleanup_temp_dir(fs, temp_path)
+                self._cleanup_temp_dir(store, temp_path)
 
             except Exception as e:
                 raise LoaderError(f"Failed to move file to final destination: {e!s}") from e
 
             self.logger.info(
-                "Successfully loaded data to S3",
+                "Successfully loaded data",
                 extra_fields={
                     "destination": final_path,
                     "format": config.format,
@@ -1044,17 +1046,20 @@ class S3Loader(BaseLoader):
             # Attempt to clean up temp directory if it exists
             if temp_path:
                 try:
-                    fs, _ = self._get_s3_filesystem(config.bucket)
-                    self._cleanup_temp_dir(fs, temp_path)
+                    self._cleanup_temp_dir(self.object_store, temp_path)
                 except Exception as cleanup_error:
                     self.logger.warning(
                         "Failed to clean up temporary directory after error",
                         extra_fields={"temp_path": temp_path, "error": str(cleanup_error)},
                     )
 
-            error_msg = f"Failed to load data to S3: {e!s}"
+            error_msg = f"Failed to load data: {e!s}"
             self.logger.error(
                 error_msg,
-                extra_fields={"error": str(e), "bucket": config.bucket, "format": config.format},
+                extra_fields={
+                    "error": str(e),
+                    "destination": config.destination,
+                    "format": config.format,
+                },
             )
             raise LoaderError(error_msg) from e

@@ -13,7 +13,10 @@ class LoaderFactory:
     """Factory for creating loader instances."""
 
     # Map of loader types to their implementations
-    _loader_types: ClassVar[Dict[str, Type[BaseLoader]]] = {"s3": S3Loader}
+    _loader_types: ClassVar[Dict[str, Type[BaseLoader]]] = {
+        "s3": S3Loader,
+        "local": S3Loader,
+    }
 
     @classmethod
     def create_loader(cls, config: LoadingConfig) -> BaseLoader:

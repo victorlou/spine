@@ -2524,8 +2524,9 @@ class DynamicHandler(BaseHandler):
                 },
             )
 
-            # Track unique S3 buckets to validate
-            s3_buckets = set()
+            # Track unique S3 buckets and local storage roots to validate
+            s3_buckets: set[str] = set()
+            local_storage_roots: set[str] = set()
 
             # Get the list of sources that are actually part of the execution plan
             selected_sources = {
@@ -2568,12 +2569,21 @@ class DynamicHandler(BaseHandler):
                                     f"Missing S3 bucket configuration for resource: {resource_name}"
                                 )
                             s3_buckets.add(resource_config.loading.bucket)
+                        elif resource_config.loading.destination == "local":
+                            if not resource_config.loading.storage_root:
+                                raise HandlerError(
+                                    f"Missing storage_root for local loading on resource: {resource_name}"
+                                )
+                            local_storage_roots.add(resource_config.loading.storage_root)
 
                 self.logger.info(f"Successfully validated source: {source_name}")
 
             # Test S3 connectivity for all unique buckets
             for bucket in s3_buckets:
                 self._test_s3_connectivity(bucket)
+
+            for storage_root in local_storage_roots:
+                self._test_local_storage_writable(storage_root)
 
             self.logger.info("Configuration validation completed successfully")
 

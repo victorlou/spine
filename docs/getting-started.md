@@ -63,7 +63,7 @@ For active development: customizing configs, debugging, or contributing.
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Java 17** (required for Spark)
 - Redis 7.0+ (for context management)
-- AWS credentials (for S3 access)
+- Loading destination credentials, if your configuration needs them (for example AWS when using **`destination: s3`**)
 - API credentials for your data sources
 
 ### Installation
@@ -177,5 +177,5 @@ python -m src.main --select jsonplaceholder --limit 5 --log-level TRACE
 | `--show-plan` | Show execution plan without validation or execution |
 | `--log-level` | Set log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 | `--select` | Comma-separated source or `source:resource` selections |
-| `--limit` | Limit API requests per resource (0 = skip). When used, data is NOT saved to S3 |
+| `--limit` | Limit API requests per resource (0 = skip). When used, data is not written to the configured loading destination |
 | `--backfill`, `-b` | Force backfill date ranges instead of default dates |

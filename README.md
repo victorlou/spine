@@ -102,7 +102,7 @@ src/
 ├── handler/         # Pipeline orchestration
 ├── planner/         # Execution planning & dependency resolution
 ├── service/         # API/auth implementations
-├── loader/          # Data destinations (S3, etc.)
+├── loader/          # Data destinations (local filesystem, S3, …)
 ├── parser/          # Lightweight transformations
 ├── config/          # Config parsing and models
 ├── utils/

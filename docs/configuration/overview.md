@@ -5,6 +5,7 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
+- [Database resources and request contexts](#database-resources-and-request-contexts)
 
 ## Configuration Layout
 
@@ -71,3 +72,11 @@ sources:
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |
 | **PostgreSQL / HANA** | `type: postgresql` or `type: hana` with JDBC-style connection fields. PostgreSQL requires `database`. For HANA, `database` is the **tenant database name** passed to hdbcli as `databaseName` (must match a real tenant; errors such as `database '…' not connected` usually mean the wrong name). It can be omitted when your `host:port` already targets a single tenant. See [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml). |
+
+### Database resources and request contexts
+
+For PostgreSQL and HANA resources, Spine reads the configured table (or `database_select_query`) **once per resource run**, regardless of how many [request contexts](parameters.md) batching or backfill produces. Request contexts still drive REST/SDK calls; they do **not** cause repeated `SELECT`-style extracts of the same static query.
+
+- **Why:** The handler does not substitute per-context values into `database_schema`, `database_table`, or `database_select_query` today. Running one extract avoids duplicate database load and avoids duplicating identical rows in Spark when `request_contexts` has length greater than one.
+- **Transformations:** When transformations run on database-sourced DataFrames, the request context passed in is taken from **`request_contexts[0]`** (first context after expansion). Design batch inputs and transforms accordingly.
+- **Scoping data:** To limit which rows are read, set **`database_select_query`** to the SQL you need (static query in YAML). Per-context or templated SQL is not supported yet; if you need different extracts per context, split into separate resources or follow future docs for SQL templating.

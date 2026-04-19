@@ -1792,55 +1792,74 @@ class DynamicHandler(BaseHandler):
 
         When ``fields`` is omitted or empty, output columns match the extract (name and source
         equal each result column), same idea as REST resources without an explicit field list.
+
+        The physical table (or ``database_select_query``) is resolved once per resource run:
+        ``extract_table`` is not repeated per ``request_contexts`` entry. Batch-expanded contexts
+        affect REST/SDK requests, not multiple JDBC reads of the same query. Transformations
+        for database resources still receive ``request_contexts[0]`` as request context.
         """
         resource_config = resource_meta.config
         configured_fields = resource_config.fields
         schema = str(resource_config.database_schema).strip()
         table = str(resource_config.database_table).strip()
-        all_df: Optional[DataFrame] = None
+        request_context_count = len(request_contexts)
+        extract_invocations = 0
         service.connect()
-        inferred_schema_logged = False
         try:
-            for _ctx in request_contexts:
-                df = service.extract_table(
-                    schema=schema,
-                    table=table,
-                    select_query=resource_config.database_select_query,
-                    spark_session=self.spark,
+            if not request_contexts:
+                self.logger.debug(
+                    "Database extract skipped: no request contexts",
+                    extra_fields={
+                        "resource_name": resource_meta.resource_name,
+                        "source": resource_meta.source_name,
+                        "request_context_count": request_context_count,
+                        "extract_invocations": extract_invocations,
+                    },
                 )
-                if configured_fields:
-                    fields = configured_fields
-                else:
-                    fields = [SchemaField(name=c, source=c) for c in df.columns]
-                    if not inferred_schema_logged:
-                        self.logger.info(
-                            "Database extract has no configured fields; inferring output columns from extract",
-                            extra_fields={
-                                "resource_name": resource_meta.resource_name,
-                                "source": resource_meta.source_name,
-                                "inferred_columns": list(df.columns),
-                            },
-                        )
-                        inferred_schema_logged = True
-                select_cols = []
-                for f in fields:
-                    if f.source not in df.columns:
-                        raise HandlerError(
-                            f"Configured field source {f.source!r} not in extract columns: {list(df.columns)}",
-                            operation="process_resource",
-                            details={
-                                "resource_name": resource_meta.resource_name,
-                                "source": resource_meta.source_name,
-                            },
-                        )
-                    select_cols.append(col(f.source).cast("string").alias(f.name))
-                batch_df = df.select(*select_cols)
-                all_df = (
-                    batch_df
-                    if all_df is None
-                    else all_df.unionByName(batch_df, allowMissingColumns=True)
+                return None
+
+            df = service.extract_table(
+                schema=schema,
+                table=table,
+                select_query=resource_config.database_select_query,
+                spark_session=self.spark,
+            )
+            extract_invocations += 1
+
+            if configured_fields:
+                fields = configured_fields
+            else:
+                fields = [SchemaField(name=c, source=c) for c in df.columns]
+                self.logger.info(
+                    "Database extract has no configured fields; inferring output columns from extract",
+                    extra_fields={
+                        "resource_name": resource_meta.resource_name,
+                        "source": resource_meta.source_name,
+                        "inferred_columns": list(df.columns),
+                    },
                 )
-            return all_df
+            select_cols = []
+            for f in fields:
+                if f.source not in df.columns:
+                    raise HandlerError(
+                        f"Configured field source {f.source!r} not in extract columns: {list(df.columns)}",
+                        operation="process_resource",
+                        details={
+                            "resource_name": resource_meta.resource_name,
+                            "source": resource_meta.source_name,
+                        },
+                    )
+                select_cols.append(col(f.source).cast("string").alias(f.name))
+            self.logger.info(
+                "Database extract dataframe built",
+                extra_fields={
+                    "resource_name": resource_meta.resource_name,
+                    "source": resource_meta.source_name,
+                    "request_context_count": request_context_count,
+                    "extract_invocations": extract_invocations,
+                },
+            )
+            return df.select(*select_cols)
         finally:
             service.close()
 

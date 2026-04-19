@@ -25,6 +25,9 @@ from src.config.config_models import (
     ResourceConfig,
     SourceConfig,
 )
+from src.planner.database_request_context import (
+    validate_plan_time_static_database_request_context_expansion,
+)
 from src.utils.databricks_utils import DatabricksUtils
 from src.utils.dynamic_values import ComplexDynamicValue, DynamicValueType, FilterConfig
 from src.utils.exceptions import PlanningError
@@ -300,6 +303,18 @@ class ExecutionPlan:
                             },
                         },
                     )
+
+        self._validate_database_resources_plan_time_request_contexts()
+
+    def _validate_database_resources_plan_time_request_contexts(self) -> None:
+        """Reject database resources whose static batch inputs expand to multiple contexts."""
+        for meta in self._resource_metadata.values():
+            source_config = self.get_source_config(meta.source_name)
+            if source_config is None:
+                continue
+            validate_plan_time_static_database_request_context_expansion(
+                meta, source_type=source_config.type
+            )
 
     def _load_dependency_queries(self) -> None:
         """

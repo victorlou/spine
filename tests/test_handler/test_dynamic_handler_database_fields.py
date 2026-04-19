@@ -96,7 +96,7 @@ def test_build_database_dataframe_respects_configured_fields(spark_session: Spar
 def test_build_database_dataframe_single_extract_with_multiple_contexts(
     spark_session: SparkSession,
 ) -> None:
-    """Multiple request contexts must not re-run JDBC extract or duplicate rows (issue #11)."""
+    """Multiple request contexts must not re-run JDBC extract or duplicate rows."""
     handler = object.__new__(DynamicHandler)
     handler.spark = spark_session
     handler.logger = get_logger("test_dynamic_handler_db")

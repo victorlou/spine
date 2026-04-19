@@ -25,12 +25,15 @@ from src.config.config_models import (
     ResourceConfig,
     SchemaField,
     SourceConfig,
-    SourceType,
+    is_database_source_type,
 )
 from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
 from src.loader.loader_factory import LoaderFactory
 from src.parser.spark_parser import SparkParser
+from src.planner.database_request_context import (
+    reject_if_database_has_multiple_runtime_request_contexts,
+)
 from src.planner.execution_plan import ExecutionPlan, ResourceMetadata
 from src.service.service_factory import ServiceFactory
 from src.utils.backfill_dates import generate_backfill_date_pairs
@@ -855,7 +858,7 @@ class DynamicHandler(BaseHandler):
                         f"Probing source connectivity for {source_name} using resource: {resource_name}"
                     )
 
-                    if source_config.type in (SourceType.POSTGRESQL, SourceType.HANA):
+                    if is_database_source_type(source_config.type):
                         try:
                             service.connect()
                             self.logger.debug(
@@ -1778,9 +1781,6 @@ class DynamicHandler(BaseHandler):
                 )
             )
 
-    def _is_database_source(self, source_config: SourceConfig) -> bool:
-        return source_config.type in (SourceType.POSTGRESQL, SourceType.HANA)
-
     def _build_database_dataframe(
         self,
         service: Any,
@@ -1788,14 +1788,14 @@ class DynamicHandler(BaseHandler):
         request_contexts: List[Dict[str, Any]],
     ) -> Optional[DataFrame]:
         """
-        Connect, extract via Spark JDBC / HANA driver, project to configured fields (string typed).
+        Connect, extract via the database source service, project to configured fields (string typed).
 
         When ``fields`` is omitted or empty, output columns match the extract (name and source
         equal each result column), same idea as REST resources without an explicit field list.
 
         The physical table (or ``database_select_query``) is resolved once per resource run:
         ``extract_table`` is not repeated per ``request_contexts`` entry. Batch-expanded contexts
-        affect REST/SDK requests, not multiple JDBC reads of the same query. Transformations
+        affect REST/SDK requests, not multiple reads of the same query. Transformations
         for database resources still receive ``request_contexts[0]`` as request context.
         """
         resource_config = resource_meta.config
@@ -1901,7 +1901,7 @@ class DynamicHandler(BaseHandler):
             if self.spark is None:
                 raise HandlerError("Spark session is not initialized for processing")
 
-            is_db = self._is_database_source(source_config)
+            is_db = is_database_source_type(source_config.type)
 
             # Check if streaming is enabled for this resource
             streaming_config = resource_config.get_streaming_config(self.config.defaults.streaming)
@@ -2041,6 +2041,16 @@ class DynamicHandler(BaseHandler):
                 use_backfill=use_backfill,
             )
             total_contexts = len(request_contexts)
+            # Static multi-context database batching fails at plan build; this only catches
+            # runtime-resolved expansion (SOURCE inputs, Redis, etc.).
+            reject_if_database_has_multiple_runtime_request_contexts(
+                is_db=is_db,
+                request_context_count=total_contexts,
+                resource_name=resource_name,
+                source_name=source_name,
+                batch_input_keys=list(resource_meta.batch_inputs.keys()),
+                use_backfill=use_backfill,
+            )
             failed_context_count = 0
 
             # Process each context (HTTP/SDK only; database sources use Spark extract_table)

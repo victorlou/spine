@@ -1824,7 +1824,7 @@ class DynamicHandler(BaseHandler):
                 select_query=resource_config.database_select_query,
                 spark_session=self.spark,
             )
-            extract_invocations = 1
+            extract_invocations += 1
 
             if configured_fields:
                 fields = configured_fields

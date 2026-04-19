@@ -22,11 +22,9 @@ from pydantic import (
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicOrStaticValue,
+    DynamicSourceReference,
     DynamicValueType,
     get_resolver,
-)
-from src.utils.dynamic_values import (
-    SourceConfig as DynamicValueSourceConfig,
 )
 from src.utils.redis_context import RedisContextManager
 
@@ -479,12 +477,13 @@ class InputConfig(BaseModel):
             self.value.type == DynamicValueType.SOURCE and self.value.source_config is not None
         )
 
-    def get_source_config(self) -> Optional[DynamicValueSourceConfig]:
+    def get_source_config(self) -> Optional[DynamicSourceReference]:
         """
         Get the source configuration if this parameter has one defined.
 
         Returns:
-            Optional[DynamicValueSourceConfig]: Source configuration if value is a ComplexDynamicValue with SOURCE
+            Optional[DynamicSourceReference]: Reference to another source's field when value is a
+            ComplexDynamicValue with SOURCE type and ``source_config`` is set.
         """
         if isinstance(self.value, ComplexDynamicValue) and (
             self.value.type == DynamicValueType.SOURCE and self.value.source_config is not None

@@ -9,10 +9,8 @@ from src.planner.database_request_context import (
 from src.planner.execution_plan import ResourceMetadata
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
+    DynamicSourceReference,
     DynamicValueType,
-)
-from src.utils.dynamic_values import (
-    SourceConfig as DynamicSourceConfig,
 )
 from src.utils.exceptions import PlanningError
 
@@ -105,7 +103,7 @@ def test_plan_time_skips_when_estimate_unknown_dynamic_batch() -> None:
             "parent_id": {
                 "value": ComplexDynamicValue(
                     type=DynamicValueType.SOURCE,
-                    source_config=DynamicSourceConfig(source="other", field="id"),
+                    source_config=DynamicSourceReference(source="other", field="id"),
                 ),
                 "location": "query",
                 "batch_size": 1,

@@ -141,8 +141,8 @@ class FilterConfig(BaseModel):
         return None
 
 
-class SourceConfig(BaseModel):
-    """Configuration for resolving values from other sources (resources)."""
+class DynamicSourceReference(BaseModel):
+    """Points at another source's field when ``DynamicValueType`` is ``SOURCE``."""
 
     source: str  # Source endpoint for dynamic values
     field: str  # Field to extract from source
@@ -167,7 +167,7 @@ class ComplexDynamicValue(BaseModel):
     databricks_config: Optional[DatabricksDeltaTableConfig] = (
         None  # Added for databricks delta table operations
     )
-    source_config: Optional[SourceConfig] = (
+    source_config: Optional[DynamicSourceReference] = (
         None  # Added for resolving values from other sources (resources)
     )
     pagination_config: Optional[Dict[str, Any]] = (

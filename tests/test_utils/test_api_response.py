@@ -1,9 +1,5 @@
 """Tests for shared API response_key normalization."""
 
-import pytest
-from pydantic import ValidationError
-
-from src.config.config_models import ResourceConfig
 from src.utils.data_utils import dict_response_key_to_records
 
 
@@ -49,21 +45,3 @@ class TestDictResponseKeyToRecords:
         records, missing = dict_response_key_to_records(data, "count")
         assert missing is False
         assert records == [42]
-
-
-class TestResourceConfigResponseKey:
-    def test_strips_whitespace(self):
-        r = ResourceConfig(response_key="  a.b  ")
-        assert r.response_key == "a.b"
-
-    def test_none_allowed(self):
-        r = ResourceConfig(response_key=None)
-        assert r.response_key is None
-
-    def test_empty_string_rejected(self):
-        with pytest.raises(ValidationError):
-            ResourceConfig(response_key="")
-
-    def test_whitespace_only_rejected(self):
-        with pytest.raises(ValidationError):
-            ResourceConfig(response_key="   \t  ")

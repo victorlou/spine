@@ -828,17 +828,6 @@ class ResourceConfig(BaseModel):
             )
         return defaults
 
-    @field_validator("response_key")
-    @classmethod
-    def normalize_response_key(cls, v: Optional[str]) -> Optional[str]:
-        """Strip whitespace; reject empty strings so misconfiguration fails at load time."""
-        if v is None:
-            return None
-        s = v.strip()
-        if not s:
-            raise ValueError("response_key cannot be empty or whitespace-only")
-        return s
-
     @field_validator("request_inputs", mode="before")
     @classmethod
     def normalize_request_inputs(cls, v: Any) -> Dict[str, Any]:

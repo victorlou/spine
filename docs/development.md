@@ -16,16 +16,20 @@
 | **yamllint** | YAML linter | `.yamllint` |
 
 **Run locally**
+
 ```bash
-pip install -r requirements-dev.txt
+uv sync --all-groups
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 black --check --diff src/ tests/
 ruff check src/ tests/
 yamllint config/defaults.example.yml config/examples/
 ```
 
+Without activating the venv, the same tools work as `uv run black …`, `uv run ruff …`, `uv run yamllint …` (CI uses `uv run` so each step does not rely on shell activation).
+
 ### CI
 
-GitHub Actions runs the same lint commands as above, installs dependencies from PyPI, and runs `pytest` on **pull requests and pushes to `dev` and `main`**, and on **pushes of version tags** (`v*`). A container image is **built and pushed to GHCR on pushes to `main`** (including `latest` and a SHA tag) **and on `v*` tag pushes** (image tagged with the release version). No private package index or repository secrets are required for the default pipeline.
+GitHub Actions runs the same lint commands as above, installs dependencies with **`uv sync --frozen --all-groups`** (from [`uv.lock`](../uv.lock)), and runs **`uv run pytest`** on **pull requests and pushes to `dev` and `main`**, and on **pushes of version tags** (`v*`). A container image is **built and pushed to GHCR on pushes to `main`** (including `latest` and a SHA tag) **and on `v*` tag pushes** (image tagged with the release version). No private package index or repository secrets are required for the default pipeline.
 
 See [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
@@ -47,7 +51,11 @@ ruff check --fix src/ tests/
 pytest
 ```
 
+(Or `uv run pytest` without activating the venv.)
+
 ## Debugging
+
+With `.venv` activated after `uv sync --all-groups` (see **Run locally** under Code quality), or use `uv run python -m src.main …` without activating.
 
 1. **TRACE logging**
    ```bash

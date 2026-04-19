@@ -16,7 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v8
+      # Ref: https://github.com/astral-sh/setup-uv/tags
+      - uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: "3.12"
           enable-cache: true
@@ -39,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: "3.12"
           enable-cache: true

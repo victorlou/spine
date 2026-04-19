@@ -1208,16 +1208,24 @@ class StreamingConfig(BaseModel):
 
 
 class DefaultsConfig(BaseModel):
-    """Default configuration values."""
+    """Default configuration values. See ``config/defaults.example.yml`` for a full operator template."""
 
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
     )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(
-            destination="s3", format="parquet", compression="snappy"
+            destination="local",
+            format="delta",
+            write_mode="overwrite",
+            compression="snappy",
+            storage_root=".spine/local-output",
+            prefix="default/output",
         ),
-        description="Default loading configuration",
+        description=(
+            "Default loading when ``defaults.loading`` is omitted from YAML: local Delta under "
+            "``.spine/local-output`` (relative to CONFIG_PATH) with placeholder prefix; override for S3 or real paths."
+        ),
     )
     context: ContextConfig = Field(
         default_factory=ContextConfig, description="Context management configuration"

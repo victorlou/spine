@@ -4,7 +4,7 @@
 
 - [Destinations](#destinations)
   - [Amazon S3](#amazon-s3)
-  - [Local filesystem (preview)](#local-filesystem-preview)
+  - [Local filesystem](#local-filesystem)
   - [Other object stores (preview)](#other-object-stores-preview)
 - [Delta Save Modes](#delta-save-modes)
   - [Overwrite](#overwrite)
@@ -14,7 +14,7 @@
 
 ## Destinations
 
-Loading uses Spark with Hadoop `FileSystem` URIs. Use **`destination: s3`** with **`bucket`** and **`prefix`** for Amazon S3, or **`destination: local`** with **`storage_root`** and **`prefix`** to write under a local directory as `file://` URIs (for example CI or on-prem without object storage).
+Loading uses Spark with Hadoop `FileSystem` URIs. Use **`destination: local`** with **`storage_root`** and **`prefix`** to write under a local directory as `file://` URIs, or **`destination: s3`** with **`bucket`** and **`prefix`** for Amazon S3. If your `defaults.yml` omits a `defaults.loading` block entirely, Spine applies a built-in default of **`destination: local`** with a relative **`storage_root`** under `.spine/local-output` and a placeholder **`prefix`**; copy [`config/defaults.example.yml`](../../config/defaults.example.yml) for an explicit starting point.
 
 Credentials and connectors follow your Spark deployment (for example IAM on AWS, or Hadoop `fs.*` settings for other schemes).
 
@@ -22,7 +22,7 @@ Credentials and connectors follow your Spark deployment (for example IAM on AWS,
 
 Use `destination: "s3"`, `bucket`, and `prefix` as in the examples below. `prefix` must look like `source_name/resource_name` (not a single segment).
 
-### Local filesystem (preview)
+### Local filesystem
 
 **`storage_root`** may be **absolute** or **relative**. Relative values are resolved when the operator config is loaded: they are joined to the **operator config directory** (the directory you pass as `CONFIG_PATH` / the folder that contains `defaults.yml`), not the process current working directory. That keeps paths portable across macOS, Linux, and Windows (paths are normalized with `pathlib` before Spark sees them).
 
@@ -112,7 +112,8 @@ loading:
 
 | `destination` | Required fields | Notes |
 |---------------|-----------------|--------|
-| `s3` | `bucket`, `prefix` | `prefix` uses the `source/resource` shape described above. |
+| `s3` | `bucket`, `prefix` | `prefix` uses the `source/resource` shape described above. Set **`destination: "s3"`** on the resource (or in defaults) whenever you set `bucket`; shallow merge with **`destination: local`** defaults would otherwise keep `local`. |
 | `local` | `storage_root`, `prefix` | `storage_root` may be absolute, or relative to the operator config directory (`CONFIG_PATH`, the folder that contains `defaults.yml`). Relative values are resolved when the config is loaded. |
+| *(omitted `defaults.loading`)* | *(built-in default)* | Same as **`local`** with relative **`storage_root: ".spine/local-output"`** and placeholder **`prefix: "default/output"`**; override per resource or in **`defaults.yml`**. |
 
 Filesystem helpers for loaders live under **`src/loader/`** (for example `object_store.py`, `local_storage.py`).

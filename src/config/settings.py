@@ -12,17 +12,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.config.config_loader import ConfigLoader
 from src.config.config_models import PipelineConfig
+from src.config.repository_root import repository_root
 from src.utils.aws_credentials import AWSCredentialManager
 from src.utils.exceptions import AWSError, ConfigError
 from src.utils.logger import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
-
-
-def _repository_root() -> Path:
-    """Parent of `src/` (directory that contains `config/` and `src/`)."""
-    return Path(__file__).resolve().parents[2]
 
 
 def _resolve_pipeline_config_dir(config_path_setting: str) -> Path:
@@ -35,7 +31,7 @@ def _resolve_pipeline_config_dir(config_path_setting: str) -> Path:
     raw = Path(config_path_setting)
     if raw.is_absolute():
         return raw.resolve()
-    return (_repository_root() / "config" / raw).resolve()
+    return (repository_root() / "config" / raw).resolve()
 
 
 class SparkSettings(BaseSettings):

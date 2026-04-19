@@ -3,7 +3,7 @@ Data manipulation utilities.
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.config.config_models import ResourceConfig
 
@@ -32,6 +32,22 @@ def get_nested_value(data: Dict[str, Any], key_path: str, required: bool = False
         if required:
             raise KeyError(f"Required field '{key_path}' not found in data") from None
         return None
+
+
+def dict_response_key_to_records(data: Dict[str, Any], response_key: str) -> Tuple[List[Any], bool]:
+    """
+    Extract records from a dict API payload using ``response_key`` (dot paths via ``get_nested_value``).
+
+    Returns:
+        ``(records, missing_path)``. ``missing_path`` is True when the path is absent or ``None``.
+        Otherwise ``records`` is the list at the path, or a single-element list wrapping a dict or scalar.
+    """
+    result_data = get_nested_value(data, response_key)
+    if result_data is None:
+        return [], True
+    if isinstance(result_data, list):
+        return result_data, False
+    return [result_data], False
 
 
 def set_nested_value(data: Dict[str, Any], key_path: str, value: Any) -> None:

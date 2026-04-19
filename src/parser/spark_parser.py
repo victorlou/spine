@@ -15,6 +15,7 @@ from src.planner.execution_plan import ExecutionPlan
 from src.utils.data_utils import (
     add_iteration_context_to_record,
     build_params_json,
+    dict_response_key_to_records,
     get_include_as_field_params,
     get_nested_value,
 )
@@ -420,29 +421,27 @@ class SparkParser:
         # Convert single dict to list
         records = data if isinstance(data, list) else [data]
 
-        # Handle nested data structures
-        if len(records) == 1 and isinstance(records[0], dict):
-            if self.config.response_key and self.config.response_key in records[0]:
-                nested_data = records[0][self.config.response_key]
-                if nested_data is None:
-                    self.logger.warning(
-                        f"Found None under response_key '{self.config.response_key}'",
-                        extra_fields={"raw_data": str(records[0])[:100]},
-                    )
-                    return {"schema": self._build_target_schema(parent_context), "records": []}
-                elif isinstance(nested_data, list):
-                    records = nested_data
-                elif isinstance(nested_data, dict):
-                    records = [nested_data]
-                else:
-                    self.logger.warning(
-                        f"Unexpected data type under response_key '{self.config.response_key}'",
-                        extra_fields={
-                            "type": type(nested_data).__name__,
-                            "value": str(nested_data)[:100],
-                        },
-                    )
-                    return {"schema": self._build_target_schema(parent_context), "records": []}
+        # Handle nested data structures (dot paths via get_nested_value; same as REST/SDK)
+        if len(records) == 1 and isinstance(records[0], dict) and self.config.response_key:
+            nested_list, missing = dict_response_key_to_records(
+                records[0], self.config.response_key
+            )
+            if missing:
+                self.logger.warning(
+                    f"Response key '{self.config.response_key}' not found or None in record",
+                    extra_fields={"raw_data": str(records[0])[:100]},
+                )
+                return {"schema": self._build_target_schema(parent_context), "records": []}
+            records = nested_list
+            if records and not all(isinstance(r, dict) for r in records):
+                self.logger.warning(
+                    f"Expected dict records under response_key '{self.config.response_key}'",
+                    extra_fields={
+                        "types": [type(r).__name__ for r in records[:5]],
+                        "value_preview": str(records[0])[:100],
+                    },
+                )
+                return {"schema": self._build_target_schema(parent_context), "records": []}
 
         # Extract fields according to schema
         processed_records = []

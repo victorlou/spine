@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 from src.config.config_models import SourceConfig
 from src.config.settings import Settings
 from src.service.base_service import BaseSourceService, ServiceError
-from src.utils.data_utils import get_nested_value
+from src.utils.data_utils import dict_response_key_to_records
 from src.utils.dynamic_values import get_resolver, resolve_headers_dict
 from src.utils.logger import get_logger
 from src.utils.redis_context import RedisContextManager
@@ -233,8 +233,8 @@ class PythonSDKService(BaseSourceService):
 
             # Handle response data extraction
             if resource.response_key and isinstance(result, dict):
-                result_data = get_nested_value(result, resource.response_key)
-                if result_data is None:
+                out, missing = dict_response_key_to_records(result, resource.response_key)
+                if missing:
                     self.logger.debug(
                         f"Response key '{resource.response_key}' not found in response - returning empty data",
                         extra_fields={
@@ -245,7 +245,7 @@ class PythonSDKService(BaseSourceService):
                         },
                     )
                     return []
-                return [result_data] if not isinstance(result_data, list) else result_data
+                return out
             elif isinstance(result, list):
                 return result
             elif isinstance(result, dict):

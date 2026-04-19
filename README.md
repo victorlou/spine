@@ -59,16 +59,23 @@ docker-compose up --build
 
 ### Local Development
 
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/) (use a current release; the Docker image pins a specific uv version).
+
 ```bash
-pip install -r requirements.txt
+uv sync --all-groups
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m src.main --show-plan
 ```
 
 Use `--select jsonplaceholder` (or the stem of the YAML file you placed under `config/sources/`) once your source files are in place.
 
+If you prefer not to activate the venv, `uv run python -m src.main …` runs against the same `.venv` uv created during sync.
+
 ---
 
 ## Basic Usage
+
+With `.venv` activated (see [Local development](#local-development) above):
 
 ```bash
 python -m src.main --select my_source_name
@@ -95,7 +102,7 @@ src/
 ├── handler/         # Pipeline orchestration
 ├── planner/         # Execution planning & dependency resolution
 ├── service/         # API/auth implementations
-├── loader/          # Data destinations (S3, etc.)
+├── loader/          # Data destinations (local filesystem, S3, …)
 ├── parser/          # Lightweight transformations
 ├── config/          # Config parsing and models
 ├── utils/

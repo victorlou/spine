@@ -31,6 +31,18 @@ resources:
     database_table: users
     # Optional: read via custom SQL instead of a full-table scan (schema/table still used for metadata/logging).
     # database_select_query: "SELECT id, name FROM public.users WHERE active = true"
+    #
+    # Optional Spark JDBC read tuning (see docs/configuration/overview.md; honored for postgresql in this repo):
+    # table_read_options:
+    #   fetch_size: 5000
+    #   # Range partitioning — supply bounds explicitly; partition_column must suit Spark's partitioner:
+    #   # partition_column: id
+    #   # lower_bound: 1
+    #   # upper_bound: 1000000
+    #   # num_partitions: 8
+    #   # log_exact_row_count: false   # default: skip df.count() when parallel read is configured
+    #   # Or use predicates instead of partition_column (mutually exclusive):
+    #   # predicates: ["id < 500000", "id >= 500000"]
     fields:
       - name: id
         source: id

@@ -5,6 +5,8 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
+- [Spark JDBC read tuning (database resources)](#spark-jdbc-read-tuning-database-resources)
+- [Database resources and request contexts](#database-resources-and-request-contexts)
 
 ## Configuration Layout
 
@@ -20,7 +22,7 @@ Python modules that load and validate this data live under `src/config/` (for ex
 
 Environment variable `CONFIG_PATH` (via pydantic-settings) selects which directory under `<repo_root>/config/` to load:
 
-- Default `.` → `<repo_root>/config/` (the `config/` folder at the project root).
+- Default `.` → `<repo_root>/config/` (the `config/` folder at the repository root).
 - Relative values → resolved under `<repo_root>/config/` (e.g. `staging` → `config/staging/`).
 - Absolute path → used as the pipeline config directory directly (for custom layouts or mounted volumes).
 
@@ -71,3 +73,25 @@ sources:
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |
 | **PostgreSQL / HANA** | `type: postgresql` or `type: hana` with JDBC-style connection fields. PostgreSQL requires `database`. For HANA, `database` is the **tenant database name** passed to hdbcli as `databaseName` (must match a real tenant; errors such as `database '…' not connected` usually mean the wrong name). It can be omitted when your `host:port` already targets a single tenant. See [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml). |
+
+### Spark JDBC read tuning (database resources)
+
+Optional **`table_read_options`** describes **Spark `DataFrameReader.jdbc`** options: parallel range reads, predicate lists, JDBC `fetchSize`, and whether to run an exact `count()` after the read for logs. That matches sources whose service implementation reads through Spark JDBC (for example **PostgreSQL** in this repository).
+
+Other database source types may use a different read path (for example HANA today uses SQLAlchemy on the driver). For those, the same YAML block is **rejected at config validation until implemented** for that source type, so configuration stays portable without implying unsupported features are active.
+
+- **`fetch_size`**: optional JDBC `fetchSize` hint (positive integer) in Spark connection properties when the backend uses Spark JDBC.
+- **Range partitioning** (mutually exclusive with `predicates`): **`partition_column`**, **`lower_bound`**, **`upper_bound`**, **`num_partitions`**. Bounds are **operator-supplied** (Spine does not infer min/max). The column must suit Spark’s JDBC partitioner (typically an integer key).
+- **`predicates`**: non-empty list of `WHERE` fragments for predicate-based JDBC reads. Do not combine with range mode fields.
+- **`log_exact_row_count`**: when `true`, run `df.count()` after read for exact logging (extra scan). When `false` and a parallel read is configured, that count is skipped.
+
+Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block once they use the same Spark read path. See commented examples in [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml).
+
+### Database resources and request contexts
+
+For **database-backed** resources (relational sources configured with `database_schema` / `database_table` or `database_select_query`), Spine reads the configured table or query **once per resource run**. [Request contexts](parameters.md) from `batch_inputs` and related expansion drive REST/SDK calls on other source types; on database resources they do not cause repeated `SELECT`-style extracts of the same static query.
+
+- **Rejection:** If expansion would produce **more than one** request context for a database-backed resource, Spine **fails before ingest** when that is provable from static batch configuration (execution plan build). If batch values are resolved only at run time (for example from other resources), the handler **still raises** after expansion (after any `record_limit` on contexts) and before the extract. Only the first context would influence transformations otherwise. Fix the pipeline by removing batch expansion for that resource, using a single context (for example via `record_limit`), or splitting work into separate resources.
+- **Why:** The handler does not substitute per-context values into `database_schema`, `database_table`, or `database_select_query` today. A single extract avoids duplicate database load and avoids duplicating identical rows in Spark.
+- **Transformations:** When transformations run on database-sourced DataFrames, the request context passed in is taken from **`request_contexts[0]`** (the sole context after a successful run). Design transforms for that single context.
+- **Scoping data:** To limit which rows are read, set **`database_select_query`** to the SQL you need (static query in YAML). Per-context or templated SQL is not supported yet; if you need different extracts per context, split into separate resources or follow future docs for SQL templating.

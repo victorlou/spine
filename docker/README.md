@@ -158,9 +158,9 @@ If you see `The config profile (...) could not be found`:
 5. Re-run `aws sso login --profile your_profile` if using SSO.
 6. Confirm region is set (`AWS_REGION` or profile region).
 
-## Private PyPI (optional)
+## Private package index (optional)
 
-If you add private wheels later, you can use a BuildKit secret and `pip.conf` during `docker build`; the default `Dockerfile` installs only from public `requirements.txt`.
+Adding private wheels or an internal index later require the use of a BuildKit secret and configuring uv (extra indexes or credentials via environment variables or `pyproject.toml`; see [uv’s authentication docs](https://docs.astral.sh/uv/configuration/authentication/)) during `docker build`. The default `Dockerfile` runs **`uv sync --frozen`** against the committed [`uv.lock`](../uv.lock) and public PyPI only.
 
 ## Configuration Files
 

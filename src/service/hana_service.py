@@ -8,7 +8,7 @@ from pyspark.sql import DataFrame, Row, SparkSession
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SAWarning
 
-from src.config.config_models import SourceConfig, SourceType
+from src.config.config_models import SourceConfig, SourceType, TableReadOptions
 from src.config.settings import Settings
 from src.service.sql_database_service import SqlDatabaseService
 from src.utils.exceptions import ServiceError
@@ -84,7 +84,9 @@ class HanaService(SqlDatabaseService):
         schema: str,
         table: str,
         select_query: Optional[str],
+        table_read_options: Optional[TableReadOptions] = None,
     ) -> DataFrame:
+        _ = table_read_options  # HANA reads via SQLAlchemy, not Spark read.jdbc; tuning not applied here yet.
         table_ref = self._table_label_for_log(schema, table)
         if select_query:
             query = select_query

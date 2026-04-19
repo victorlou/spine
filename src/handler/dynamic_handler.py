@@ -25,12 +25,15 @@ from src.config.config_models import (
     ResourceConfig,
     SchemaField,
     SourceConfig,
-    SourceType,
+    is_database_source_type,
 )
 from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
 from src.loader.loader_factory import LoaderFactory
 from src.parser.spark_parser import SparkParser
+from src.planner.database_request_context import (
+    reject_if_database_has_multiple_runtime_request_contexts,
+)
 from src.planner.execution_plan import ExecutionPlan, ResourceMetadata
 from src.service.service_factory import ServiceFactory
 from src.utils.backfill_dates import generate_backfill_date_pairs
@@ -855,7 +858,7 @@ class DynamicHandler(BaseHandler):
                         f"Probing source connectivity for {source_name} using resource: {resource_name}"
                     )
 
-                    if source_config.type in (SourceType.POSTGRESQL, SourceType.HANA):
+                    if is_database_source_type(source_config.type):
                         try:
                             service.connect()
                             self.logger.debug(
@@ -1778,9 +1781,6 @@ class DynamicHandler(BaseHandler):
                 )
             )
 
-    def _is_database_source(self, source_config: SourceConfig) -> bool:
-        return source_config.type in (SourceType.POSTGRESQL, SourceType.HANA)
-
     def _build_database_dataframe(
         self,
         service: Any,
@@ -1788,59 +1788,79 @@ class DynamicHandler(BaseHandler):
         request_contexts: List[Dict[str, Any]],
     ) -> Optional[DataFrame]:
         """
-        Connect, extract via Spark JDBC / HANA driver, project to configured fields (string typed).
+        Connect, extract via the database source service, project to configured fields (string typed).
 
         When ``fields`` is omitted or empty, output columns match the extract (name and source
         equal each result column), same idea as REST resources without an explicit field list.
+
+        The physical table (or ``database_select_query``) is resolved once per resource run:
+        ``extract_table`` is not repeated per ``request_contexts`` entry. Batch-expanded contexts
+        affect REST/SDK requests, not multiple reads of the same query. Transformations
+        for database resources still receive ``request_contexts[0]`` as request context.
         """
         resource_config = resource_meta.config
         configured_fields = resource_config.fields
         schema = str(resource_config.database_schema).strip()
         table = str(resource_config.database_table).strip()
-        all_df: Optional[DataFrame] = None
+        request_context_count = len(request_contexts)
+        extract_invocations = 0
         service.connect()
-        inferred_schema_logged = False
         try:
-            for _ctx in request_contexts:
-                df = service.extract_table(
-                    schema=schema,
-                    table=table,
-                    select_query=resource_config.database_select_query,
-                    spark_session=self.spark,
+            if not request_contexts:
+                self.logger.debug(
+                    "Database extract skipped: no request contexts",
+                    extra_fields={
+                        "resource_name": resource_meta.resource_name,
+                        "source": resource_meta.source_name,
+                        "request_context_count": request_context_count,
+                        "extract_invocations": extract_invocations,
+                    },
                 )
-                if configured_fields:
-                    fields = configured_fields
-                else:
-                    fields = [SchemaField(name=c, source=c) for c in df.columns]
-                    if not inferred_schema_logged:
-                        self.logger.info(
-                            "Database extract has no configured fields; inferring output columns from extract",
-                            extra_fields={
-                                "resource_name": resource_meta.resource_name,
-                                "source": resource_meta.source_name,
-                                "inferred_columns": list(df.columns),
-                            },
-                        )
-                        inferred_schema_logged = True
-                select_cols = []
-                for f in fields:
-                    if f.source not in df.columns:
-                        raise HandlerError(
-                            f"Configured field source {f.source!r} not in extract columns: {list(df.columns)}",
-                            operation="process_resource",
-                            details={
-                                "resource_name": resource_meta.resource_name,
-                                "source": resource_meta.source_name,
-                            },
-                        )
-                    select_cols.append(col(f.source).cast("string").alias(f.name))
-                batch_df = df.select(*select_cols)
-                all_df = (
-                    batch_df
-                    if all_df is None
-                    else all_df.unionByName(batch_df, allowMissingColumns=True)
+                return None
+
+            df = service.extract_table(
+                schema=schema,
+                table=table,
+                select_query=resource_config.database_select_query,
+                spark_session=self.spark,
+                table_read_options=resource_config.table_read_options,
+            )
+            extract_invocations += 1
+
+            if configured_fields:
+                fields = configured_fields
+            else:
+                fields = [SchemaField(name=c, source=c) for c in df.columns]
+                self.logger.info(
+                    "Database extract has no configured fields; inferring output columns from extract",
+                    extra_fields={
+                        "resource_name": resource_meta.resource_name,
+                        "source": resource_meta.source_name,
+                        "inferred_columns": list(df.columns),
+                    },
                 )
-            return all_df
+            select_cols = []
+            for f in fields:
+                if f.source not in df.columns:
+                    raise HandlerError(
+                        f"Configured field source {f.source!r} not in extract columns: {list(df.columns)}",
+                        operation="process_resource",
+                        details={
+                            "resource_name": resource_meta.resource_name,
+                            "source": resource_meta.source_name,
+                        },
+                    )
+                select_cols.append(col(f.source).cast("string").alias(f.name))
+            self.logger.info(
+                "Database extract dataframe built",
+                extra_fields={
+                    "resource_name": resource_meta.resource_name,
+                    "source": resource_meta.source_name,
+                    "request_context_count": request_context_count,
+                    "extract_invocations": extract_invocations,
+                },
+            )
+            return df.select(*select_cols)
         finally:
             service.close()
 
@@ -1881,7 +1901,7 @@ class DynamicHandler(BaseHandler):
             if self.spark is None:
                 raise HandlerError("Spark session is not initialized for processing")
 
-            is_db = self._is_database_source(source_config)
+            is_db = is_database_source_type(source_config.type)
 
             # Check if streaming is enabled for this resource
             streaming_config = resource_config.get_streaming_config(self.config.defaults.streaming)
@@ -2021,6 +2041,16 @@ class DynamicHandler(BaseHandler):
                 use_backfill=use_backfill,
             )
             total_contexts = len(request_contexts)
+            # Static multi-context database batching fails at plan build; this only catches
+            # runtime-resolved expansion (SOURCE inputs, Redis, etc.).
+            reject_if_database_has_multiple_runtime_request_contexts(
+                is_db=is_db,
+                request_context_count=total_contexts,
+                resource_name=resource_name,
+                source_name=source_name,
+                batch_input_keys=list(resource_meta.batch_inputs.keys()),
+                use_backfill=use_backfill,
+            )
             failed_context_count = 0
 
             # Process each context (HTTP/SDK only; database sources use Spark extract_table)
@@ -2494,8 +2524,9 @@ class DynamicHandler(BaseHandler):
                 },
             )
 
-            # Track unique S3 buckets to validate
-            s3_buckets = set()
+            # Track unique S3 buckets and local storage roots to validate
+            s3_buckets: set[str] = set()
+            local_storage_roots: set[str] = set()
 
             # Get the list of sources that are actually part of the execution plan
             selected_sources = {
@@ -2538,12 +2569,21 @@ class DynamicHandler(BaseHandler):
                                     f"Missing S3 bucket configuration for resource: {resource_name}"
                                 )
                             s3_buckets.add(resource_config.loading.bucket)
+                        elif resource_config.loading.destination == "local":
+                            if not resource_config.loading.storage_root:
+                                raise HandlerError(
+                                    f"Missing storage_root for local loading on resource: {resource_name}"
+                                )
+                            local_storage_roots.add(resource_config.loading.storage_root)
 
                 self.logger.info(f"Successfully validated source: {source_name}")
 
             # Test S3 connectivity for all unique buckets
             for bucket in s3_buckets:
                 self._test_s3_connectivity(bucket)
+
+            for storage_root in local_storage_roots:
+                self._test_local_storage_writable(storage_root)
 
             self.logger.info("Configuration validation completed successfully")
 

@@ -60,10 +60,10 @@ For active development: customizing configs, debugging, or contributing.
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Java 17** (required for Spark)
 - Redis 7.0+ (for context management)
-- AWS credentials (for S3 access)
+- Loading destination credentials, if your configuration needs them (for example AWS when using **`destination: s3`**)
 - API credentials for your data sources
 
 ### Installation
@@ -90,8 +90,16 @@ For active development: customizing configs, debugging, or contributing.
 
 3. **Install Python dependencies**
    ```bash
-   pip install -r requirements.txt
+   uv sync --all-groups
    ```
+
+   **Activate the environment** (uv creates `.venv` in the repo root):
+
+   ```bash
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   ```
+
+   If you skip activation, prefix commands with `uv run` (for example `uv run python -m src.main`) so they use that project venv instead of whatever `python` is first on your `PATH`.
 
 4. **Install and start Redis**
 
@@ -134,6 +142,8 @@ For active development: customizing configs, debugging, or contributing.
 
 ## Usage
 
+The examples below assume **`.venv` is activated** (`source .venv/bin/activate`; on Windows, `.venv\Scripts\activate`) after `uv sync --all-groups`. Otherwise use `uv run python -m src.main …` in place of `python -m src.main …`.
+
 **Show execution plan** (recommended first step)
 ```bash
 python -m src.main --show-plan
@@ -167,5 +177,5 @@ python -m src.main --select jsonplaceholder --limit 5 --log-level TRACE
 | `--show-plan` | Show execution plan without validation or execution |
 | `--log-level` | Set log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL) |
 | `--select` | Comma-separated source or `source:resource` selections |
-| `--limit` | Limit API requests per resource (0 = skip). When used, data is NOT saved to S3 |
+| `--limit` | Limit API requests per resource (0 = skip). When used, data is not written to the configured loading destination |
 | `--backfill`, `-b` | Force backfill date ranges instead of default dates |

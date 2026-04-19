@@ -1,4 +1,4 @@
-"""Tests for database source types (PostgreSQL, HANA) configuration models."""
+"""Tests for relational database source configuration models."""
 
 import pytest
 from pydantic import ValidationError

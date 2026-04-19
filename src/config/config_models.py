@@ -22,11 +22,9 @@ from pydantic import (
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicOrStaticValue,
+    DynamicSourceReference,
     DynamicValueType,
     get_resolver,
-)
-from src.utils.dynamic_values import (
-    SourceConfig as DynamicValueSourceConfig,
 )
 from src.utils.redis_context import RedisContextManager
 
@@ -44,9 +42,9 @@ class RetryConfig(BaseModel):
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
-    For S3 destinations, prefix must be specified and should follow the pattern:
+    For S3 and local destinations, prefix must be specified and should follow the pattern:
     'source_name/resource_name' (e.g., 'my_source/users').
-    The actual data will be stored in a 'data' subdirectory under this prefix.
+    For S3, the actual Parquet data will be stored in a 'data' subdirectory under this prefix.
 
     Save modes for Delta format:
     - **overwrite** (default): Replace all existing data in the table
@@ -63,7 +61,15 @@ class LoadingConfig(BaseModel):
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
     compression: Optional[str] = "snappy"
     bucket: Optional[str] = None  # For S3, can be inherited from defaults
-    prefix: Optional[str] = None  # For S3, required if destination is 's3'
+    prefix: Optional[str] = None  # For S3/local, required for those destinations
+    storage_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filesystem directory for destination: local (Spark file://). "
+            "May be relative to the repository root (directory containing ``src/``); "
+            "ConfigLoader resolves it before validation."
+        ),
+    )
     merge_keys: Optional[List[str]] = Field(
         default=None,
         description="List of column names to use as primary keys for merge operations. Required when write_mode is 'merge'.",
@@ -76,11 +82,11 @@ class LoadingConfig(BaseModel):
     @field_validator("prefix")
     @classmethod
     def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate prefix format for S3 destinations."""
-        # Only validate if this is an S3 destination
-        if info.data.get("destination") == "s3":
+        """Validate prefix format for S3 and local filesystem destinations."""
+        dest = info.data.get("destination")
+        if dest in ("s3", "local"):
             if not v:
-                raise ValueError("prefix is required for S3 destinations")
+                raise ValueError(f"prefix is required for {dest} destinations")
 
             # Remove any leading/trailing slashes
             v = v.strip("/")
@@ -89,7 +95,7 @@ class LoadingConfig(BaseModel):
             parts = v.split("/")
             if len(parts) < 2:
                 raise ValueError(
-                    "S3 prefix must follow the pattern 'source_name/resource_name' "
+                    "prefix must follow the pattern 'source_name/resource_name' "
                     "(e.g., 'my_source/users')"
                 )
 
@@ -99,15 +105,6 @@ class LoadingConfig(BaseModel):
                     "prefix should not include 'data' directory - it will be automatically appended"
                 )
 
-        return v
-
-    @field_validator("bucket")
-    @classmethod
-    def validate_bucket(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate bucket is present for S3 destinations."""
-        if info.data.get("destination") == "s3":
-            if not v:
-                raise ValueError("bucket is required for S3 destination")
         return v
 
     @model_validator(mode="after")
@@ -129,6 +126,17 @@ class LoadingConfig(BaseModel):
                 )
             if len(self.merge_keys) == 0:
                 raise ValueError("merge_keys must be a non-empty list when write_mode is 'merge'.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_destination_storage_fields(self) -> "LoadingConfig":
+        """Require bucket (S3) or storage_root (local); runs after merge_keys check."""
+        if self.destination == "s3":
+            if not self.bucket:
+                raise ValueError("bucket is required for S3 destination")
+        elif self.destination == "local":
+            if not self.storage_root:
+                raise ValueError("storage_root is required for local destination")
         return self
 
     model_config = {"validate_assignment": True}
@@ -479,12 +487,13 @@ class InputConfig(BaseModel):
             self.value.type == DynamicValueType.SOURCE and self.value.source_config is not None
         )
 
-    def get_source_config(self) -> Optional[DynamicValueSourceConfig]:
+    def get_source_config(self) -> Optional[DynamicSourceReference]:
         """
         Get the source configuration if this parameter has one defined.
 
         Returns:
-            Optional[DynamicValueSourceConfig]: Source configuration if value is a ComplexDynamicValue with SOURCE
+            Optional[DynamicSourceReference]: Reference to another source's field when value is a
+            ComplexDynamicValue with SOURCE type and ``source_config`` is set.
         """
         if isinstance(self.value, ComplexDynamicValue) and (
             self.value.type == DynamicValueType.SOURCE and self.value.source_config is not None
@@ -674,6 +683,87 @@ class PythonSDKConfig(BaseModel):
     )
 
 
+class TableReadOptions(BaseModel):
+    """
+    Optional Spark ``DataFrameReader.jdbc`` read tuning for large relational table extracts.
+
+    Use either **range partitioning** (partition_column + bounds + num_partitions) or
+    **predicates** (list of WHERE fragments for parallel reads), not both.
+    Source types that do not read via Spark JDBC yet reject this block at validation time.
+    """
+
+    fetch_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="JDBC fetchSize hint passed through Spark connection properties.",
+    )
+    partition_column: Optional[str] = Field(
+        default=None,
+        description="Numeric (or date-castable) column for Spark parallel range reads.",
+    )
+    lower_bound: Optional[Union[int, float]] = Field(
+        default=None,
+        description="Inclusive lower bound for partition_column (operator-supplied).",
+    )
+    upper_bound: Optional[Union[int, float]] = Field(
+        default=None,
+        description="Inclusive upper bound for partition_column (operator-supplied).",
+    )
+    num_partitions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of JDBC partitions when using partition_column.",
+    )
+    predicates: Optional[List[str]] = Field(
+        default=None,
+        description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
+    )
+    log_exact_row_count: bool = Field(
+        default=False,
+        description=(
+            "When True, run df.count() after read for exact row logging (full scan). "
+            "When False and a parallel read is configured, row count is omitted to avoid an extra scan."
+        ),
+    )
+
+    def uses_parallel_read(self) -> bool:
+        """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
+        if self.predicates is not None and len(self.predicates) > 0:
+            return True
+        col = (self.partition_column or "").strip()
+        return bool(col)
+
+    @model_validator(mode="after")
+    def validate_partitioning(self) -> "TableReadOptions":
+        if self.predicates is not None and len(self.predicates) == 0:
+            raise ValueError("table_read_options.predicates must be non-empty when set")
+
+        has_pred = self.predicates is not None and len(self.predicates) > 0
+        col = (self.partition_column or "").strip()
+        has_range = bool(col)
+
+        if has_pred and has_range:
+            raise ValueError(
+                "table_read_options: use either predicates or partition_column range mode, not both"
+            )
+        if has_range:
+            if self.num_partitions is None:
+                raise ValueError(
+                    "table_read_options.num_partitions is required when partition_column is set"
+                )
+            if self.lower_bound is None or self.upper_bound is None:
+                raise ValueError(
+                    "table_read_options.lower_bound and upper_bound are required when "
+                    "partition_column is set"
+                )
+            if self.lower_bound > self.upper_bound:
+                raise ValueError(
+                    "table_read_options.lower_bound must be less than or equal to upper_bound "
+                    "(Spark JDBC range partitioning)"
+                )
+        return self
+
+
 class ResourceConfig(BaseModel):
     """Configuration for a single ingest resource (REST, SDK, or future source types)."""
 
@@ -730,7 +820,7 @@ class ResourceConfig(BaseModel):
         description="Configuration to ensure all parameter values are present in the output dataframe",
     )
 
-    # Relational database extract target (used when source type is postgresql or hana)
+    # Relational database extract target (used when source type is a database kind)
     database_schema: Optional[str] = Field(
         default=None,
         description="Database schema for JDBC/HANA extract (required for database source types on this resource).",
@@ -742,6 +832,14 @@ class ResourceConfig(BaseModel):
     database_select_query: Optional[str] = Field(
         default=None,
         description="Optional full SQL query for extract; when set, schema/table may still be used for logging.",
+    )
+    table_read_options: Optional[TableReadOptions] = Field(
+        default=None,
+        description=(
+            "Optional table read tuning (Spark JDBC partitioning, fetch size, logging). "
+            "Honored when the source service uses Spark read.jdbc; other database implementations "
+            "may reject this block until they support the same read path."
+        ),
     )
 
     def resolve_parameters(
@@ -911,10 +1009,14 @@ class ResourceConfig(BaseModel):
 
         super().__init__(**data)
 
-        # Validate S3 configuration (only if loading is configured)
+        # Validate loading destination fields (only if loading is configured)
         if self.loading and self.loading.destination == "s3" and not self.loading.bucket:
             raise ValueError(
                 "bucket is required for S3 destination (either in defaults or resource configuration)"
+            )
+        if self.loading and self.loading.destination == "local" and not self.loading.storage_root:
+            raise ValueError(
+                "storage_root is required for local destination (either in defaults or resource configuration)"
             )
 
 
@@ -925,6 +1027,17 @@ class SourceType(StrEnum):
     PYTHON_SDK = "python_sdk"
     POSTGRESQL = "postgresql"
     HANA = "hana"
+
+
+def is_database_source_type(source_type: SourceType) -> bool:
+    """
+    Return True for source kinds that use the relational database extract path
+    (single table or query read per resource run, shared request-context rules).
+
+    Add new database ``SourceType`` values here when wiring a backend through the
+    same planner and handler behavior.
+    """
+    return source_type in (SourceType.POSTGRESQL, SourceType.HANA)
 
 
 class SourceConfig(BaseModel):
@@ -940,7 +1053,7 @@ class SourceConfig(BaseModel):
     )
     resources: Dict[str, ResourceConfig]
 
-    # Relational database connection (postgresql / hana)
+    # Relational database connection (see ``is_database_source_type`` for supported kinds)
     host: Optional[str] = Field(default=None, description="Database host")
     port: Optional[Union[int, str]] = Field(default=None, description="Database port")
     username: Optional[str] = Field(default=None, description="Database user")
@@ -958,10 +1071,6 @@ class SourceConfig(BaseModel):
         description="Extra JDBC properties or URL query parameters (driver-specific).",
     )
 
-    @staticmethod
-    def _is_database_source(t: SourceType) -> bool:
-        return t in (SourceType.POSTGRESQL, SourceType.HANA)
-
     @model_validator(mode="after")
     def validate_source_type(self):
         """Validate that source type matches required fields."""
@@ -971,7 +1080,7 @@ class SourceConfig(BaseModel):
         elif self.type == SourceType.PYTHON_SDK:
             if not self.sdk:
                 raise ValueError("sdk configuration is required for python_sdk source type")
-        elif self._is_database_source(self.type):
+        elif is_database_source_type(self.type):
             if not self.host:
                 raise ValueError(f"{self.type.value} source requires host")
             if self.port is None or str(self.port).strip() == "":
@@ -983,6 +1092,11 @@ class SourceConfig(BaseModel):
             for resource_name, resource in self.resources.items():
                 if not resource.enabled:
                     continue
+                if resource.table_read_options is not None and self.type == SourceType.HANA:
+                    raise ValueError(
+                        f"{self.type.value} resource '{resource_name}' cannot use table_read_options "
+                        "until this source type reads via Spark JDBC (hana uses a different extract path today)"
+                    )
                 sch = (resource.database_schema or "").strip()
                 tbl = (resource.database_table or "").strip()
                 if not sch or not tbl:
@@ -1101,16 +1215,25 @@ class StreamingConfig(BaseModel):
 
 
 class DefaultsConfig(BaseModel):
-    """Default configuration values."""
+    """Default configuration values. See ``config/defaults.example.yml`` for a full operator template."""
 
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
     )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(
-            destination="s3", format="parquet", compression="snappy"
+            destination="local",
+            format="delta",
+            write_mode="overwrite",
+            compression="snappy",
+            storage_root=".spine/local-output",
+            prefix="default/output",
         ),
-        description="Default loading configuration",
+        description=(
+            "Default loading when ``defaults.loading`` is omitted from YAML: local Delta under "
+            "``.spine/local-output`` (relative to the repository root, next to ``config/`` in a normal checkout) "
+            "with placeholder prefix; override for S3 or real paths."
+        ),
     )
     context: ContextConfig = Field(
         default_factory=ContextConfig, description="Context management configuration"

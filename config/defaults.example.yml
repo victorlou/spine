@@ -6,7 +6,8 @@ defaults:
     initial_delay: 1
     backoff_factor: 2
 
-  # Default loading: local Delta under CONFIG_PATH/.spine/local-output (gitignored).
+  # Default loading: local Delta; relative storage_root resolves under the repository
+  #   root (dir containing src/), e.g. repo/.spine/local-output (gitignored).
   # Override per resource if needed, or replace this block with S3 (see commented example below).
   loading:
     destination: "local"

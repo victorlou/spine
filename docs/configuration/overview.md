@@ -22,7 +22,7 @@ Python modules that load and validate this data live under `src/config/` (for ex
 
 Environment variable `CONFIG_PATH` (via pydantic-settings) selects which directory under `<repo_root>/config/` to load:
 
-- Default `.` → `<repo_root>/config/` (the `config/` folder at the project root).
+- Default `.` → `<repo_root>/config/` (the `config/` folder at the repository root).
 - Relative values → resolved under `<repo_root>/config/` (e.g. `staging` → `config/staging/`).
 - Absolute path → used as the pipeline config directory directly (for custom layouts or mounted volumes).
 

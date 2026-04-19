@@ -68,7 +68,8 @@ class LoadingConfig(BaseModel):
         default=None,
         description=(
             "Filesystem directory for destination: local (Spark file://). "
-            "May be relative to CONFIG_PATH; ConfigLoader resolves it before validation."
+            "May be relative to the repository root (directory containing ``src/``); "
+            "ConfigLoader resolves it before validation."
         ),
     )
     merge_keys: Optional[List[str]] = Field(
@@ -1224,7 +1225,8 @@ class DefaultsConfig(BaseModel):
         ),
         description=(
             "Default loading when ``defaults.loading`` is omitted from YAML: local Delta under "
-            "``.spine/local-output`` (relative to CONFIG_PATH) with placeholder prefix; override for S3 or real paths."
+            "``.spine/local-output`` (relative to the repository root, next to ``config/`` in a normal checkout) "
+            "with placeholder prefix; override for S3 or real paths."
         ),
     )
     context: ContextConfig = Field(

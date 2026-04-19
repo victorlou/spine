@@ -18,8 +18,10 @@ def loading_base_uri(
     Return the authority + path prefix URI for Spark writes (no trailing slash).
 
     - ``s3`` → ``s3a://{bucket}``
-    - ``local`` → ``file:///...`` from resolved ``storage_root`` (should be absolute
-      after config load; relative values resolve against the process current working directory).
+    - ``local`` → ``file:///...`` from resolved ``storage_root``. After ``ConfigLoader``
+      runs, ``storage_root`` is absolute (relative paths are anchored to the repository
+      root: the directory containing ``src/``). Constructing ``LoadingConfig`` without the
+      loader resolves relative paths against the current working directory instead.
     """
     if destination == "s3":
         if not bucket:

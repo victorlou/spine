@@ -10,6 +10,7 @@ import yaml
 from pydantic import ValidationError
 
 from src.config.config_models import PipelineConfig
+from src.config.repository_root import repository_root
 from src.utils.env_manager import resolve_env_var
 from src.utils.exceptions import ConfigError
 from src.utils.logger import get_logger
@@ -92,10 +93,8 @@ class ConfigLoader:
             # Resolve relative paths in disk_config (relative to config file/directory)
             raw_config = self._resolve_disk_config_paths(raw_config, path_for_disk)
 
-            # Resolve relative local loading storage_root against operator config directory
-            raw_config = self._resolve_local_loading_storage_paths(
-                raw_config, config_path.resolve()
-            )
+            # Resolve relative local loading storage_root against repository root (see repository_root)
+            raw_config = self._resolve_local_loading_storage_paths(raw_config)
 
             # Process configuration
             processed_config = self._process_config(raw_config)
@@ -309,15 +308,21 @@ class ConfigLoader:
         return config
 
     def _resolve_local_loading_storage_paths(
-        self, config: Dict[str, Any], config_root: Path
+        self, config: Dict[str, Any], layout_root: Optional[Path] = None
     ) -> Dict[str, Any]:
         """
         Resolve relative ``storage_root`` for ``destination: local`` loading configs.
 
-        Anchors to the operator config directory (same as ``PipelineConfig.config_root`` /
-        ``CONFIG_PATH``), not the process working directory.
+        Anchors to the **repository root** (directory containing ``src/``), independent
+        of where ``CONFIG_PATH`` points. In a normal checkout, ``.spine/local-output``
+        therefore sits next to ``config/`` under the repo. If operator YAML lives
+        elsewhere (absolute ``CONFIG_PATH``) and you want output beside that tree, use
+        an absolute ``storage_root``. Absolute ``storage_root`` values are unchanged.
+
+        ``layout_root``: optional override for tests; production uses
+        :func:`~src.config.repository_root.repository_root`.
         """
-        root = config_root.resolve()
+        root = (layout_root if layout_root is not None else repository_root()).resolve()
 
         def resolve_loading_dict(loading: Dict[str, Any]) -> None:
             if loading.get("destination") != "local":

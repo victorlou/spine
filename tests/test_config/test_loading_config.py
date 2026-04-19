@@ -48,7 +48,7 @@ def test_loading_config_local_requires_storage_root() -> None:
 
 
 def test_loading_config_local_allows_relative_storage_root() -> None:
-    """Relative paths are allowed on the model; ConfigLoader resolves against CONFIG_PATH."""
+    """Relative paths are allowed on the model; ConfigLoader resolves against repository root."""
     cfg = LoadingConfig(
         destination="local",
         storage_root=".spine/local-output",

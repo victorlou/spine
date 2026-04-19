@@ -22,8 +22,7 @@ class _SupportsStaticRequestCountEstimate(Protocol):
     resource_name: str
     batch_inputs: dict
 
-    def estimate_request_count(self) -> Optional[int]:
-        ...
+    def estimate_request_count(self) -> Optional[int]: ...
 
 
 def validate_plan_time_static_database_request_context_expansion(

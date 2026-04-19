@@ -5,7 +5,11 @@
 - [Configuration Layout](#configuration-layout)
 - [Main Structure](#main-structure)
 - [Configuration Topics](#configuration-topics)
+<<<<<<< HEAD
 - [Spark JDBC read tuning (database resources)](#spark-jdbc-read-tuning-database-resources)
+=======
+- [Database resources and request contexts](#database-resources-and-request-contexts)
+>>>>>>> origin/dev
 
 ## Configuration Layout
 
@@ -85,3 +89,11 @@ Other database source types may use a different read path (for example HANA toda
 - **`log_exact_row_count`**: when `true`, run `df.count()` after read for exact logging (extra scan). When `false` and a parallel read is configured, that count is skipped.
 
 Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block once they use the same Spark read path. See commented examples in [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml).
+
+### Database resources and request contexts
+
+For PostgreSQL and HANA resources, Spine reads the configured table (or `database_select_query`) **once per resource run**, regardless of how many [request contexts](parameters.md) batching or backfill produces. Request contexts still drive REST/SDK calls; they do **not** cause repeated `SELECT`-style extracts of the same static query.
+
+- **Why:** The handler does not substitute per-context values into `database_schema`, `database_table`, or `database_select_query` today. Running one extract avoids duplicate database load and avoids duplicating identical rows in Spark when `request_contexts` has length greater than one.
+- **Transformations:** When transformations run on database-sourced DataFrames, the request context passed in is taken from **`request_contexts[0]`** (first context after expansion). Design batch inputs and transforms accordingly.
+- **Scoping data:** To limit which rows are read, set **`database_select_query`** to the SQL you need (static query in YAML). Per-context or templated SQL is not supported yet; if you need different extracts per context, split into separate resources or follow future docs for SQL templating.

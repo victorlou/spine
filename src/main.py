@@ -156,7 +156,7 @@ def run_pipeline(
                                 extra_fields={
                                     "source": source_name,
                                     "resource_name": resource_name,
-                                    "count": details["count"],
+                                    "count": details.get("count"),
                                     "location": details.get("location"),
                                 },
                             )

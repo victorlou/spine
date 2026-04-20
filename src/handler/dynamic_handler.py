@@ -20,6 +20,7 @@ from src.collector import (
 from src.config.config_models import (
     BatchSizeMode,
     InputConfig,
+    LoadingConfig,
     PaginationConfig,
     PaginationType,
     ResourceConfig,
@@ -128,6 +129,25 @@ class DynamicHandler(BaseHandler):
 
         # Create execution plan
         self.execution_plan = ExecutionPlan(self.config, self.redis_context, selection=selection)
+
+    def _resolve_resource_loading(
+        self, source_name: str, resource_name: str, resource_config: ResourceConfig
+    ) -> Optional[LoadingConfig]:
+        """
+        Effective loading for this resource: merged defaults with optional ``source/resource`` prefix.
+
+        Returns None when loading is disabled (``enabled: false`` after merge).
+        """
+        loading = resource_config.loading
+        if loading is None:
+            loading = self.config.defaults.loading
+        if not loading.enabled:
+            return None
+        if loading.destination in ("s3", "local"):
+            prefix = (loading.prefix or "").strip()
+            if not prefix:
+                return loading.model_copy(update={"prefix": f"{source_name}/{resource_name}"})
+        return loading
 
     def _apply_request_limit(
         self,
@@ -1962,6 +1982,10 @@ class DynamicHandler(BaseHandler):
                     extra_fields={"resource_name": resource_name},
                 )
 
+            effective_loading = self._resolve_resource_loading(
+                source_name, resource_name, resource_config
+            )
+
             # Decide whether to use backfill date ranges (manual --backfill or auto on first write)
             use_backfill = False
             if not is_db and resource_meta.backfill_config:
@@ -1971,16 +1995,16 @@ class DynamicHandler(BaseHandler):
                         "Backfill enabled by CLI for resource",
                         extra_fields={"resource_name": resource_name, "source": source_name},
                     )
-                elif resource_config.loading and self.record_limit is None:
+                elif effective_loading and self.record_limit is None:
                     try:
-                        loader = LoaderFactory.create_loader(resource_config.loading)
+                        loader = LoaderFactory.create_loader(effective_loading)
                         if hasattr(loader, "set_spark_session") and self.spark:
                             loader.set_spark_session(self.spark)
                         if hasattr(loader, "destination_exists"):
                             source_config = self.execution_plan.get_source_config(source_name)
                             source_type = source_config.type if source_config else None
                             exists = loader.destination_exists(
-                                resource_config.loading, source_type=source_type
+                                effective_loading, source_type=source_type
                             )
                             if not exists:
                                 use_backfill = True
@@ -1999,7 +2023,7 @@ class DynamicHandler(BaseHandler):
                                 "error": str(e),
                             },
                         )
-                elif not resource_config.loading and self.record_limit is None:
+                elif not effective_loading and self.record_limit is None:
                     # Snapshot trigger pattern: resource has no loading but dependents do
                     # Check dependents' destinations; if any is empty, trigger backfill
                     dependent_loadings = self.execution_plan.get_dependent_loading_configs(
@@ -2101,7 +2125,11 @@ class DynamicHandler(BaseHandler):
                         "Finalized streaming collector",
                         extra_fields={
                             "has_transformations": bool(resource_meta.config.transformations),
-                            "record_count": all_data_df.count() if all_data_df else 0,
+                            "record_count": (
+                                all_data_df.count()
+                                if all_data_df and self.config.defaults.log_full_row_count
+                                else None
+                            ),
                             "collector_type": type(collector).__name__,
                         },
                     )
@@ -2136,7 +2164,11 @@ class DynamicHandler(BaseHandler):
                     self.logger.trace(
                         "Applying transformations to complete data",
                         extra_fields={
-                            "record_count": all_data_df.count(),
+                            "record_count": (
+                                all_data_df.count()
+                                if self.config.defaults.log_full_row_count
+                                else None
+                            ),
                             "transformation_count": len(resource_meta.config.transformations),
                         },
                     )
@@ -2177,9 +2209,14 @@ class DynamicHandler(BaseHandler):
             # Store and process results
             try:
                 if all_data_df is not None:
-                    record_count = all_data_df.count()
+                    if self.config.defaults.log_full_row_count:
+                        record_count = all_data_df.count()
+                        has_data = record_count > 0
+                    else:
+                        has_data = len(all_data_df.take(1)) > 0
+                        record_count = None
 
-                    if record_count > 0:
+                    if has_data:
                         # Store in Redis only when this resource has downstream dependents (needed for SOURCE params)
                         dependent_resources = self.execution_plan.get_dependent_resources(
                             source_name, resource_name
@@ -2198,8 +2235,8 @@ class DynamicHandler(BaseHandler):
 
                         # Load data if we have records and loading is configured
                         location = None
-                        if self.record_limit is None and resource_config.loading:
-                            loader = LoaderFactory.create_loader(resource_config.loading)
+                        if self.record_limit is None and effective_loading:
+                            loader = LoaderFactory.create_loader(effective_loading)
                             if hasattr(loader, "set_spark_session"):
                                 loader.set_spark_session(self.spark)
 
@@ -2209,7 +2246,7 @@ class DynamicHandler(BaseHandler):
 
                             location = loader.load(
                                 data=all_data_df,
-                                config=resource_config.loading,
+                                config=effective_loading,
                                 source_type=source_type,
                             )
 
@@ -2394,7 +2431,7 @@ class DynamicHandler(BaseHandler):
                             extra_fields={
                                 "result_summary": {
                                     "status": resource_result.get("status", "success"),
-                                    "record_count": resource_result.get("count", 0),
+                                    "record_count": resource_result.get("count"),
                                     "location": resource_result.get("location"),
                                 }
                             },
@@ -2561,20 +2598,23 @@ class DynamicHandler(BaseHandler):
                                     f"Invalid schema field in {resource_name}: name is required"
                                 )
 
-                    # Validate loading configuration (if provided)
-                    if resource_config.loading:
-                        if resource_config.loading.destination == "s3":
-                            if not resource_config.loading.bucket:
+                    # Validate loading configuration (effective merge + auto prefix)
+                    eff_loading = self._resolve_resource_loading(
+                        source_name, resource_name, resource_config
+                    )
+                    if eff_loading:
+                        if eff_loading.destination == "s3":
+                            if not eff_loading.bucket:
                                 raise HandlerError(
                                     f"Missing S3 bucket configuration for resource: {resource_name}"
                                 )
-                            s3_buckets.add(resource_config.loading.bucket)
-                        elif resource_config.loading.destination == "local":
-                            if not resource_config.loading.storage_root:
+                            s3_buckets.add(eff_loading.bucket)
+                        elif eff_loading.destination == "local":
+                            if not eff_loading.storage_root:
                                 raise HandlerError(
                                     f"Missing storage_root for local loading on resource: {resource_name}"
                                 )
-                            local_storage_roots.add(resource_config.loading.storage_root)
+                            local_storage_roots.add(eff_loading.storage_root)
 
                 self.logger.info(f"Successfully validated source: {source_name}")
 

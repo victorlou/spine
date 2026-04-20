@@ -6,7 +6,7 @@
 #   3. Rename `resources` keys and adjust `database_schema` / `database_table` to match your tables.
 #   4. Set `enabled: true` on the source (and resources) when you are ready to run.
 #
-# SAP HANA uses the same layout with `type: hana`; you need the HANA driver in your runtime image.
+# SAP HANA uses the same layout with `type: hana`; Spark loads the SAP ngdbc JDBC driver via packages.
 enabled: false
 type: postgresql
 host: ${PG_HOST:-localhost}
@@ -40,7 +40,7 @@ resources:
     #   # lower_bound: 1
     #   # upper_bound: 1000000
     #   # num_partitions: 8
-    #   # log_exact_row_count: false   # default: skip df.count() when parallel read is configured
+    #   # log_exact_row_count: true   # opt-in: full df.count() after JDBC read (expensive)
     #   # Or use predicates instead of partition_column (mutually exclusive):
     #   # predicates: ["id < 500000", "id >= 500000"]
     fields:
@@ -48,5 +48,5 @@ resources:
         source: id
       - name: name
         source: name
-    # Omit per-resource loading to use the defaults from `config/defaults.yml` (bucket, format, prefix, etc.).
-    loading: null
+    # Omit per-resource `loading` to inherit defaults from `config/defaults.yml` (prefix becomes
+    # `{source_name}/{resource_name}` at runtime). Use `loading: { enabled: false }` to skip writes.

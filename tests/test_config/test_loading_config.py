@@ -67,3 +67,23 @@ def test_loading_config_merge_requires_keys() -> None:
             format="delta",
             write_mode="merge",
         )
+
+
+def test_loading_config_local_prefix_optional() -> None:
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root="/tmp/spine",
+        prefix=None,
+        format="delta",
+    )
+    assert cfg.prefix is None
+
+
+def test_loading_config_disabled_skips_bucket_and_prefix_rules() -> None:
+    cfg = LoadingConfig(
+        enabled=False,
+        destination="s3",
+        format="delta",
+        prefix="any",
+    )
+    assert cfg.enabled is False

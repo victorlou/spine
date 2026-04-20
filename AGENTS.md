@@ -61,6 +61,15 @@ When work is tracked in a GitHub issue, treat the issue body as the contract.
 
 - **Before coding** — Read **Problem statement**, **Scope** / **Out of scope**, and **Done when**. Stay inside that boundary. If the issue is wrong, incomplete, or you need a wider change, **suggest** comment text for the operator to post on the issue (or propose splitting a follow-up issue) instead of folding extra requirements into one PR.
 - **Traceability** — Assistants should **not** open or edit pull requests or issues on GitHub via MCP/API unless the operator explicitly asks for that. Default: propose a **Related** line (and the rest of the PR description) the operator can paste when they open the PR, following [`.github/pull_request_template.md`](.github/pull_request_template.md): e.g. `Fixes #N` if merge should close the issue, or `Refs #N` for partial or exploratory work.
+- **Comments and other mutating actions** — Do **not** post issue or pull request **comments**, labels, assignments, or other GitHub mutations via MCP/API unless the operator **explicitly confirms** that you should do so in that conversation. Default to **drafting** comment text in the chat for them to copy.
 - **Operator-visible changes** — If the issue changes YAML shape, defaults, or runtime behavior operators rely on, remind them to update `docs/configuration/` (and examples under `config/` where applicable) in the same change set, not as a silent follow-up.
+
+### Issue-related questions (triage and overlap)
+
+When the task is to check existing issues, relate work to an issue, or avoid duplicating tickets:
+
+- **Prefer the GitHub MCP** when it is enabled for the workspace: use read-only tools (`list_issues`, `search_issues`, `issue_read`, and so on) rather than guessing from memory. Discover the correct MCP server identifier and tool parameters from the project’s MCP descriptor files.
+- **Gather full context** — The issue body alone is not enough. Also pull **comments**, **labels**, and **sub-issues** when the API exposes them, and scan for cross-links in the description (`Depends on`, `Refs`, duplicate pointers). Summarize overlap with the current task using that complete picture.
+- **Read-only vs write** — Using MCP to **read** issues and comments is encouraged for accuracy; creating, editing, or commenting still requires explicit operator consent per **Traceability** and **Comments and other mutating actions** above.
 
 For filing issues, use [`.github/ISSUE_DRAFT_STANDARD.md`](.github/ISSUE_DRAFT_STANDARD.md) and the **Engineering task** template under [`.github/ISSUE_TEMPLATE/engineering_task.md`](.github/ISSUE_TEMPLATE/engineering_task.md) so scope and acceptance criteria stay consistent with how implementers work.

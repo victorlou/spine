@@ -68,7 +68,7 @@ sources:
 | Topic | Description |
 |-------|-------------|
 | [Request inputs](parameters.md) | Request inputs (path/query/body), static/dynamic, SOURCE, DATABRICKS, DATE, batching, formats, shorthand, headers, POST body |
-| [Backfill](backfill.md) | Date-range backfill for body request inputs |
+| [Backfill](backfill.md) | Date-range backfill for path, query, or body request inputs |
 | [Loading](loading.md) | Delta save modes (overwrite, append, merge), S3, local |
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |

@@ -1,8 +1,9 @@
 """
 Backfill configuration parsing for date-range backfill.
 
-Backfill is detected from body inputs whose value is a dict containing "backfill".
-Callers pass a body-like dict (e.g. from request_inputs with location=body, key -> config.value).
+Backfill is detected from request inputs (path, query, or body) whose ``value`` is a
+dict containing ``backfill``. Callers pass a flat name -> ``value`` map (e.g. from
+``ResourceConfig.get_request_input_values_for_backfill()``).
 Supports STATIC_DATE (driver) and REFERENCE (tied to driver) types.
 """
 
@@ -31,7 +32,7 @@ class BackfillStaticDateConfig:
 class BackfillReferenceConfig:
     """Reference backfill: value = driver_field + increment, capped at limit."""
 
-    field: str  # request_body key this references (e.g. startDate)
+    field: str  # request input name of the driver (e.g. startDate)
     increment: str  # e.g. '15 DAY'
     limit: Any  # str or dict for dynamic (e.g. type: DATE, operation: TODAY)
 
@@ -40,11 +41,11 @@ class BackfillReferenceConfig:
 class BackfillConfig:
     """Parsed backfill configuration for a resource."""
 
-    driver_key: str  # request_body key that drives the ranges (e.g. startDate)
-    reference_key: str  # request_body key tied to driver (e.g. endDate)
+    driver_key: str  # request input name that drives the ranges (e.g. startDate)
+    reference_key: str  # request input name tied to driver (e.g. endDate)
     driver_config: BackfillStaticDateConfig
     reference_config: BackfillReferenceConfig
-    request_body_keys: List[str]  # [driver_key, reference_key] for injection
+    field_keys: List[str]  # [driver_key, reference_key]; injected into request context
 
 
 def parse_increment(increment_str: str) -> relativedelta:
@@ -84,21 +85,22 @@ def parse_increment(increment_str: str) -> relativedelta:
     raise ValueError(f"increment unit must be DAY, WEEK, or MONTH, got: {unit!r}")
 
 
-def get_backfill_config(request_body: Optional[Dict[str, Any]]) -> Optional[BackfillConfig]:
+def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[BackfillConfig]:
     """
-    Detect and parse backfill configuration from resource request body inputs.
+    Detect and parse backfill configuration from resource request input values.
 
     Looks for one driver field (backfill.type: STATIC_DATE) and one reference
     field (backfill.type: REFERENCE, field: <driver_key>). Returns None if
     backfill is not configured or config is invalid.
 
     Args:
-        request_body: Resource body-input dict (may contain nested backfill).
+        input_values: Map of request input name to configured ``value`` (path,
+            query, or body), each optionally shaped as ``{ value: ..., backfill: ... }``.
 
     Returns:
         BackfillConfig if valid backfill is configured, else None.
     """
-    if not request_body or not isinstance(request_body, dict):
+    if not input_values or not isinstance(input_values, dict):
         return None
 
     driver_key: Optional[str] = None
@@ -106,7 +108,7 @@ def get_backfill_config(request_body: Optional[Dict[str, Any]]) -> Optional[Back
     reference_key: Optional[str] = None
     reference_config: Optional[BackfillReferenceConfig] = None
 
-    for key, value in request_body.items():
+    for key, value in input_values.items():
         if not isinstance(value, dict) or "backfill" not in value:
             continue
         backfill = value.get("backfill")
@@ -166,5 +168,5 @@ def get_backfill_config(request_body: Optional[Dict[str, Any]]) -> Optional[Back
         reference_key=reference_key,
         driver_config=driver_config,
         reference_config=reference_config,
-        request_body_keys=[driver_key, reference_key],
+        field_keys=[driver_key, reference_key],
     )

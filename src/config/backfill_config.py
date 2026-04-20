@@ -4,7 +4,10 @@ Backfill configuration parsing for date-range backfill.
 Backfill is detected from request inputs (path, query, or body) whose ``value`` is a
 dict containing ``backfill``. Callers pass a flat name -> ``value`` map (e.g. from
 ``ResourceConfig.get_request_input_values_for_backfill()``).
-Supports STATIC_DATE (driver) and REFERENCE (tied to driver) types.
+
+Each resource supports a single driver/reference pair: one ``STATIC_DATE`` and one
+``REFERENCE``. Extra valid blocks raise ``ValueError`` (wrapped as ``PlanningError``
+during plan build).
 """
 
 from dataclasses import dataclass
@@ -89,13 +92,15 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
     """
     Detect and parse backfill configuration from resource request input values.
 
-    Looks for one driver field (backfill.type: STATIC_DATE) and one reference
-    field (backfill.type: REFERENCE, field: <driver_key>). Returns None if
-    backfill is not configured or config is invalid.
+    Each resource supports **at most one** date-range backfill: one ``STATIC_DATE``
+    driver and one ``REFERENCE`` tied to that driver. The driver and reference may
+    live on different ``request_inputs`` locations (path, query, body); that still
+    produces a single stream of date windows, not a Cartesian product of multiple
+    backfills.
 
-    Args:
-        input_values: Map of request input name to configured ``value`` (path,
-            query, or body), each optionally shaped as ``{ value: ..., backfill: ... }``.
+    Raises:
+        ValueError: If more than one valid driver or more than one valid reference
+            is present (duplicate ``backfill`` blocks).
 
     Returns:
         BackfillConfig if valid backfill is configured, else None.
@@ -116,9 +121,6 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
             continue
         bf_type = (backfill.get("type") or "").strip().upper()
         if bf_type == BACKFILL_TYPE_STATIC_DATE:
-            if driver_key is not None:
-                # Only one driver supported
-                continue
             start = backfill.get("start")
             end = backfill.get("end")
             increment = backfill.get("increment")
@@ -126,15 +128,23 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
                 continue
             inclusive = backfill.get("inclusive", False)
             try:
-                driver_config = BackfillStaticDateConfig(
+                candidate_driver = BackfillStaticDateConfig(
                     start=start,
                     end=end,
                     increment=str(increment).strip(),
                     inclusive=bool(inclusive),
                 )
-                parse_increment(driver_config.increment)
+                parse_increment(candidate_driver.increment)
             except (ValueError, TypeError):
                 continue
+            if driver_key is not None:
+                raise ValueError(
+                    "Backfill allows at most one STATIC_DATE driver per resource; "
+                    f"found another on input {key!r} (first driver: {driver_key!r}). "
+                    "Splitting start/end across path, query, or body is fine; defining "
+                    "two independent driver blocks is not."
+                )
+            driver_config = candidate_driver
             driver_key = key
         elif bf_type == BACKFILL_TYPE_REFERENCE:
             ref_field = backfill.get("field")
@@ -143,14 +153,21 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
             if not ref_field or not ref_increment or limit is None:
                 continue
             try:
-                reference_config = BackfillReferenceConfig(
+                candidate_reference = BackfillReferenceConfig(
                     field=str(ref_field).strip(),
                     increment=str(ref_increment).strip(),
                     limit=limit,
                 )
-                parse_increment(reference_config.increment)
+                parse_increment(candidate_reference.increment)
             except (ValueError, TypeError):
                 continue
+            if reference_key is not None:
+                raise ValueError(
+                    "Backfill allows at most one REFERENCE field per resource; "
+                    f"found another on input {key!r} (first reference: {reference_key!r}). "
+                    "Use exactly one driver/reference pair."
+                )
+            reference_config = candidate_reference
             reference_key = key
 
     if (

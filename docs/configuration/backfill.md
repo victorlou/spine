@@ -27,6 +27,8 @@ Backfill requires exactly two request inputs (in `request_inputs`, any of path /
 
 - **Reference (REFERENCE)**: Defines the window end for each start. References the driver field, adds `increment`, and caps at `limit`. Requires `field`, `increment`, and `limit`.
 
+Only **one** such pair is allowed per resource. You may place the driver on one location (e.g. query) and the reference on another (e.g. body); that still drives **one** sequence of windows per request batch, not two independent backfills or a Cartesian product. If the merged `request_inputs` contain more than one valid `STATIC_DATE` driver or more than one valid `REFERENCE`, plan build fails with a clear error.
+
 ## Date Pair Generation
 
 Each window spans at most `ref_increment` days. `endDate` is always the **last day included** in the window (inclusive semantics). The last window may be shorter when capped at `limit`.

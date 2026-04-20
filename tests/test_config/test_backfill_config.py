@@ -1,5 +1,7 @@
 """Tests for backfill config detection from request input values."""
 
+import pytest
+
 from src.config.backfill_config import get_backfill_config
 from src.config.config_models import ResourceConfig
 
@@ -138,3 +140,64 @@ def test_get_request_input_values_for_backfill_merges_path_query_body() -> None:
 def test_get_backfill_config_empty_returns_none() -> None:
     assert get_backfill_config({}) is None
     assert get_backfill_config(None) is None
+
+
+def _valid_static_backfill(start: str = "2026-01-01") -> dict:
+    return {
+        "type": "STATIC_DATE",
+        "start": start,
+        "end": "2026-01-31",
+        "increment": "15 DAY",
+    }
+
+
+def _valid_reference(field: str = "start_date") -> dict:
+    return {
+        "type": "REFERENCE",
+        "field": field,
+        "increment": "15 DAY",
+        "limit": "2026-01-31",
+    }
+
+
+def test_get_backfill_config_rejects_second_static_date_driver() -> None:
+    with pytest.raises(ValueError, match="at most one STATIC_DATE"):
+        get_backfill_config(
+            {
+                "start_date": {"value": "a", "backfill": _valid_static_backfill("2026-01-01")},
+                "other_start": {"value": "b", "backfill": _valid_static_backfill("2026-02-01")},
+                "end_date": {"value": "c", "backfill": _valid_reference("start_date")},
+            }
+        )
+
+
+def test_get_backfill_config_rejects_second_reference() -> None:
+    with pytest.raises(ValueError, match="at most one REFERENCE"):
+        get_backfill_config(
+            {
+                "start_date": {"value": "a", "backfill": _valid_static_backfill()},
+                "end_date": {"value": "b", "backfill": _valid_reference("start_date")},
+                "alt_end": {"value": "c", "backfill": _valid_reference("start_date")},
+            }
+        )
+
+
+def test_get_backfill_config_allows_invalid_second_static_without_raise() -> None:
+    """A second STATIC_DATE block that fails validation is ignored (not a duplicate driver)."""
+    cfg = get_backfill_config(
+        {
+            "start_date": {"value": "a", "backfill": _valid_static_backfill()},
+            "broken": {
+                "value": "b",
+                "backfill": {
+                    "type": "STATIC_DATE",
+                    "start": "2026-01-01",
+                    "end": "2026-01-31",
+                    "increment": "not-a-valid-increment",
+                },
+            },
+            "end_date": {"value": "c", "backfill": _valid_reference("start_date")},
+        }
+    )
+    assert cfg is not None
+    assert cfg.driver_key == "start_date"

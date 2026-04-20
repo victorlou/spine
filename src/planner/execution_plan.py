@@ -563,7 +563,14 @@ class ExecutionPlan:
 
                 # Backfill: value may be a dict with "backfill" on path, query, or body inputs
                 inputs_for_backfill = resource.get_request_input_values_for_backfill()
-                backfill_cfg = get_backfill_config(inputs_for_backfill or None)
+                try:
+                    backfill_cfg = get_backfill_config(inputs_for_backfill or None)
+                except ValueError as e:
+                    raise PlanningError(
+                        message="Invalid backfill configuration",
+                        operation="_build_resource_metadata",
+                        details={"resource": resource_id, "error": str(e)},
+                    ) from e
                 self._resource_metadata[resource_id] = ResourceMetadata(
                     source_name=source_name,
                     resource_name=resource_name,

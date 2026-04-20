@@ -855,7 +855,12 @@ class ExecutionPlan:
             dep_source, dep_resource = dep_id.split(".", 1)
             dep_config = self.get_resource_config(dep_source, dep_resource)
             dep_source_config = self.get_source_config(dep_source)
-            if dep_config and dep_config.loading and dep_source_config:
+            if (
+                dep_config
+                and dep_config.loading
+                and dep_config.loading.enabled
+                and dep_source_config
+            ):
                 result.append((dep_config.loading, dep_source_config.type))
         return result
 

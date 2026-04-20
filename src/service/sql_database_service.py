@@ -167,9 +167,10 @@ class SqlDatabaseService(BaseSourceService, ABC):
                     extra_log["partition_column"] = table_read_options.partition_column.strip()
                     extra_log["num_partitions"] = table_read_options.num_partitions
 
-            should_count = True
-            if table_read_options is not None and table_read_options.uses_parallel_read():
-                should_count = table_read_options.log_exact_row_count
+            defaults = self.settings.pipeline_config.defaults
+            should_count = defaults.log_full_row_count or (
+                table_read_options is not None and table_read_options.log_exact_row_count
+            )
 
             if should_count:
                 row_count = df.count()
@@ -179,8 +180,8 @@ class SqlDatabaseService(BaseSourceService, ABC):
                 )
             else:
                 logger.info(
-                    f"Successfully extracted from '{table_label}' (parallel JDBC read; "
-                    f"exact row count skipped; set table_read_options.log_exact_row_count to count)",
+                    f"Successfully extracted from '{table_label}' (exact row count skipped; "
+                    f"set defaults.log_full_row_count or table_read_options.log_exact_row_count for counts)",
                     extra_fields=extra_log,
                 )
             return df

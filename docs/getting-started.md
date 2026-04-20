@@ -61,7 +61,7 @@ For active development: customizing configs, debugging, or contributing.
 ### Prerequisites
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- **Java 17** (required for Spark)
+- **Java 17+** (required for Spark)
 - Redis 7.0+ (for context management)
 - Loading destination credentials, if your configuration needs them (for example AWS when using **`destination: s3`**)
 - API credentials for your data sources
@@ -76,7 +76,7 @@ For active development: customizing configs, debugging, or contributing.
    cp config/examples/jsonplaceholder.yml config/sources/jsonplaceholder.yml
    ```
 
-2. **Install Java 17** (required for Spark)
+2. **Install Java 17+** (required for Spark)
    ```bash
    # macOS
    brew install openjdk@17
@@ -85,7 +85,7 @@ For active development: customizing configs, debugging, or contributing.
    sudo apt-get update
    sudo apt-get install openjdk-17-jdk
 
-   java -version  # Should show Java 17
+   java -version  # Should show Java 17+
    ```
 
 3. **Install Python dependencies**

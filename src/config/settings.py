@@ -37,18 +37,19 @@ def _resolve_pipeline_config_dir(config_path_setting: str) -> Path:
 class SparkSettings(BaseSettings):
     """Spark-specific settings."""
 
+    model_config = SettingsConfigDict(extra="ignore")
+
     APP_NAME: str = "DataIngestion"
     MASTER: str = "local[*]"
     DRIVER_MEMORY: str = "4g"
     MEMORY_FRACTION: float = 0.8
     MEMORY_STORAGE_FRACTION: float = 0.3
 
-    class Config:
-        extra = "ignore"
-
 
 class APISettings(BaseSettings):
     """API-specific settings."""
+
+    model_config = SettingsConfigDict(extra="ignore")
 
     TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
 
@@ -71,12 +72,11 @@ class APISettings(BaseSettings):
             self.INITIAL_DELAY = config.defaults.retry.initial_delay
             self.RETRY_BACKOFF = config.defaults.retry.backoff_factor
 
-    class Config:
-        extra = "ignore"
-
 
 class AWSSettings(BaseSettings):
     """AWS-specific settings."""
+
+    model_config = SettingsConfigDict(extra="ignore")
 
     REGION: str = Field(default="ap-southeast-2", description="AWS region")
 
@@ -91,9 +91,6 @@ class AWSSettings(BaseSettings):
         except AWSError as e:
             logger.error("Failed to initialize AWS settings", extra_fields={"error": str(e)})
             raise
-
-    class Config:
-        extra = "ignore"
 
 
 class DatabricksSettings(BaseSettings):

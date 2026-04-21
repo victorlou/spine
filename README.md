@@ -101,10 +101,13 @@ config/              # defaults.yml, sources/, queries/ (operator-local; templat
 src/
 ├── handler/         # Pipeline orchestration
 ├── planner/         # Execution planning & dependency resolution
-├── service/         # API/auth implementations
+├── service/         # Source integrations (REST, databases, SDKs, …)
+├── collector/       # Collection strategy during extraction
 ├── loader/          # Data destinations (local filesystem, S3, …)
 ├── parser/          # Lightweight transformations
 ├── config/          # Config parsing and models
+├── auth/            # JWT providers for oauth_jwt
+├── audit/           # Optional audit trail recording
 ├── utils/
 └── main.py
 ```
@@ -121,7 +124,7 @@ src/
 | **Backfill** | [Date-range backfill, inclusive flag, API lag](docs/configuration/backfill.md) |
 | **Loading** | [Delta modes: overwrite, append, merge](docs/configuration/loading.md) |
 | **Auth** | [OAuth JWT, bearer token, API key](docs/configuration/auth.md) |
-| **Transformations** | [add_column, add_column_from_request, ensure_param_values](docs/configuration/transformations.md) |
+| **Transformations** | [add_column, add_column_from_request, ensure_param_values_in_output](docs/configuration/transformations.md) |
 | **Deployment** | [Docker, GitHub Actions, GHCR](docs/deployment.md) |
 | **ECS / Fargate + S3 (reference)** | [S3 push/pull boto3, IAM, ECS task def](docs/deployment/ecs-s3-reference.md) |
 | **Development** | [Linting, testing, debugging, extending](docs/development.md) |

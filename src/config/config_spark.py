@@ -6,6 +6,12 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
+# Maven coordinates Spark resolves at startup (Ivy). Keep ngdbc pin aligned with smoke testing.
+_HADOOP_AWS_PKG = "org.apache.hadoop:hadoop-aws:3.3.4"
+_DELTA_PKG = "io.delta:delta-spark_2.12:3.1.0"
+_SAP_NGDBC_PKG = "com.sap.cloud.db.jdbc:ngdbc:2.23.10"
+SPARK_JARS_PACKAGES = f"{_HADOOP_AWS_PKG},{_DELTA_PKG},{_SAP_NGDBC_PKG}"
+
 
 class ConfigSpark:
     """Configuration for Spark session."""
@@ -19,7 +25,7 @@ class ConfigSpark:
         # Set Spark packages (including Delta Lake)
         # PySpark 3.5.x uses Scala 2.12, so we use delta-spark_2.12
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            "--packages org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:3.1.0 "
+            f"--packages {SPARK_JARS_PACKAGES} "
             "--conf spark.ui.showConsoleProgress=false "
             "pyspark-shell"
         )
@@ -62,7 +68,7 @@ class ConfigSpark:
             "spark.metrics.enabled": "false",
             # Delta Lake configuration
             # Add Delta Lake JARs via packages (PySpark 3.5.x uses Scala 2.12)
-            "spark.jars.packages": "org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:3.1.0",
+            "spark.jars.packages": SPARK_JARS_PACKAGES,
             # Enable Delta SQL extensions
             "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension",
             # Configure Delta catalog
@@ -91,7 +97,7 @@ class ConfigSpark:
             "spark.driver.memory": "4g",
             # Delta Lake configuration
             # Add Delta Lake JARs via packages (PySpark 3.5.x uses Scala 2.12)
-            "spark.jars.packages": "org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:3.1.0",
+            "spark.jars.packages": SPARK_JARS_PACKAGES,
             # Enable Delta SQL extensions
             "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension",
             # Configure Delta catalog

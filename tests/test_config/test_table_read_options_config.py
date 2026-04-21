@@ -87,22 +87,24 @@ def test_postgres_allows_table_read_options() -> None:
     )
 
 
-def test_hana_rejects_table_read_options() -> None:
-    with pytest.raises(ValidationError) as exc:
-        SourceConfig(
-            type=SourceType.HANA,
-            host="localhost",
-            port=30015,
-            username="u",
-            password="p",
-            resources={
-                "t": ResourceConfig(
-                    method="GET",
-                    database_schema="S",
-                    database_table="T",
-                    table_read_options=TableReadOptions(fetch_size=500),
-                )
-            },
-        )
-    msg = str(exc.value).lower()
-    assert "table_read_options" in msg or "spark" in msg or "hana" in msg
+def test_hana_allows_table_read_options() -> None:
+    SourceConfig(
+        type=SourceType.HANA,
+        host="localhost",
+        port=30015,
+        username="u",
+        password="p",
+        resources={
+            "t": ResourceConfig(
+                method="GET",
+                database_schema="S",
+                database_table="T",
+                table_read_options=TableReadOptions(
+                    partition_column="id",
+                    lower_bound=0,
+                    upper_bound=99,
+                    num_partitions=2,
+                ),
+            )
+        },
+    )

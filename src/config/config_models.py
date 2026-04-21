@@ -4,6 +4,7 @@ Uses Pydantic for validation and type safety.
 """
 
 import ast
+import copy
 import json
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -42,8 +43,10 @@ class RetryConfig(BaseModel):
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
-    For S3 and local destinations, prefix must be specified and should follow the pattern:
-    'source_name/resource_name' (e.g., 'my_source/users').
+    For S3 and local destinations, prefix should follow ``source_name/resource_name``
+    (e.g. ``my_source/users``). When prefix is omitted, the handler fills it from the
+    source and resource name at runtime.
+
     For S3, the actual Parquet data will be stored in a 'data' subdirectory under this prefix.
 
     Save modes for Delta format:
@@ -56,6 +59,13 @@ class LoadingConfig(BaseModel):
     to be added to existing tables.
     """
 
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "When false, skip loader writes for this resource (use after merging defaults). "
+            "Omit ``loading`` on a resource to inherit defaults; set ``enabled: false`` to opt out."
+        ),
+    )
     destination: str
     format: str = "delta"
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
@@ -83,13 +93,15 @@ class LoadingConfig(BaseModel):
     @classmethod
     def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
         """Validate prefix format for S3 and local filesystem destinations."""
+        if not info.data.get("enabled", True):
+            return v
         dest = info.data.get("destination")
         if dest in ("s3", "local"):
-            if not v:
-                raise ValueError(f"prefix is required for {dest} destinations")
+            if v is None or not str(v).strip():
+                return None
 
             # Remove any leading/trailing slashes
-            v = v.strip("/")
+            v = str(v).strip("/")
 
             # Check prefix structure (should be at least source/resource)
             parts = v.split("/")
@@ -118,6 +130,8 @@ class LoadingConfig(BaseModel):
         Raises:
             ValueError: If write_mode is 'merge' but merge_keys is not provided or is empty
         """
+        if not self.enabled:
+            return self
         if self.write_mode == "merge":
             if not self.merge_keys:
                 raise ValueError(
@@ -131,6 +145,8 @@ class LoadingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_destination_storage_fields(self) -> "LoadingConfig":
         """Require bucket (S3) or storage_root (local); runs after merge_keys check."""
+        if not self.enabled:
+            return self
         if self.destination == "s3":
             if not self.bucket:
                 raise ValueError("bucket is required for S3 destination")
@@ -689,7 +705,8 @@ class TableReadOptions(BaseModel):
 
     Use either **range partitioning** (partition_column + bounds + num_partitions) or
     **predicates** (list of WHERE fragments for parallel reads), not both.
-    Source types that do not read via Spark JDBC yet reject this block at validation time.
+    Honored for relational sources that extract via Spark JDBC (PostgreSQL, HANA). Other
+    database kinds may reject this block at validation until they use the same read path.
     """
 
     fetch_size: Optional[int] = Field(
@@ -721,8 +738,9 @@ class TableReadOptions(BaseModel):
     log_exact_row_count: bool = Field(
         default=False,
         description=(
-            "When True, run df.count() after read for exact row logging (full scan). "
-            "When False and a parallel read is configured, row count is omitted to avoid an extra scan."
+            "When True, run df.count() after JDBC read for exact row logging (full scan). "
+            "When False (default), that count is skipped for this resource. Also applies to "
+            "non-parallel reads unless defaults.log_full_row_count is True."
         ),
     )
 
@@ -837,8 +855,8 @@ class ResourceConfig(BaseModel):
         default=None,
         description=(
             "Optional table read tuning (Spark JDBC partitioning, fetch size, logging). "
-            "Honored when the source service uses Spark read.jdbc; other database implementations "
-            "may reject this block until they support the same read path."
+            "Honored for PostgreSQL and HANA sources (Spark read.jdbc). Other database kinds may "
+            "reject this block until they support the same read path."
         ),
     )
 
@@ -893,6 +911,22 @@ class ResourceConfig(BaseModel):
             for name, config in self.request_inputs.items()
             if config.location == location
         }
+
+    def get_request_input_values_for_backfill(self) -> Dict[str, Any]:
+        """
+        Flat map of input name to configured ``value`` for backfill detection.
+
+        Merges path, then query, then body inputs. Input names are unique per
+        resource, so order only matters if that invariant were violated.
+
+        Returns:
+            Empty dict when there are no request_inputs.
+        """
+        merged: Dict[str, Any] = {}
+        for loc in ("path", "query", "body"):
+            for name, cfg in self.get_inputs_by_location(loc).items():
+                merged[name] = cfg.value
+        return merged
 
     def get_batch_inputs(self) -> Dict[str, RequestInputConfig]:
         """
@@ -990,31 +1024,36 @@ class ResourceConfig(BaseModel):
         # Get defaults from parent if available
         defaults = data.pop("_defaults", None)
         if defaults and isinstance(defaults, dict):
-            # Deep merge loading config with defaults (only if resource doesn't explicitly set loading to None)
+            # Deep merge loading config with defaults (inherit when omitted; opt out with enabled: false)
             if "loading" in defaults:
-                default_loading = defaults["loading"]
+                default_loading = copy.deepcopy(defaults["loading"])
                 resource_loading = data.get("loading")
 
-                # If resource explicitly sets loading to None, skip merging (keep it None)
-                # Otherwise, merge with defaults
-                if resource_loading is not None:
-                    # Merge loading configuration (resource_loading may be dict or missing)
+                if resource_loading is None:
+                    data["loading"] = default_loading
+                else:
                     if not isinstance(resource_loading, dict):
                         resource_loading = {}
-                    data["loading"] = {
-                        **default_loading,  # Start with defaults
-                        **resource_loading,  # Override with resource-specific settings
-                    }
-                # If resource_loading is None, leave it as None (explicitly skipped)
+                    data["loading"] = {**default_loading, **resource_loading}
 
         super().__init__(**data)
 
-        # Validate loading destination fields (only if loading is configured)
-        if self.loading and self.loading.destination == "s3" and not self.loading.bucket:
+        # Validate loading destination fields (only if loading is configured and enabled)
+        if (
+            self.loading
+            and self.loading.enabled
+            and self.loading.destination == "s3"
+            and not self.loading.bucket
+        ):
             raise ValueError(
                 "bucket is required for S3 destination (either in defaults or resource configuration)"
             )
-        if self.loading and self.loading.destination == "local" and not self.loading.storage_root:
+        if (
+            self.loading
+            and self.loading.enabled
+            and self.loading.destination == "local"
+            and not self.loading.storage_root
+        ):
             raise ValueError(
                 "storage_root is required for local destination (either in defaults or resource configuration)"
             )
@@ -1062,8 +1101,8 @@ class SourceConfig(BaseModel):
         default=None,
         description=(
             "Database/catalog name. Required for postgresql. "
-            "Optional for hana: set to the HANA tenant database name when using a shared SQL port; "
-            "omit when the host:port already targets a single tenant."
+            "Optional for hana: set to the HANA tenant database name (JDBC databaseName) when "
+            "using a shared SQL port; omit when the host:port already targets a single tenant."
         ),
     )
     connection_params: Optional[Dict[str, Any]] = Field(
@@ -1092,11 +1131,6 @@ class SourceConfig(BaseModel):
             for resource_name, resource in self.resources.items():
                 if not resource.enabled:
                     continue
-                if resource.table_read_options is not None and self.type == SourceType.HANA:
-                    raise ValueError(
-                        f"{self.type.value} resource '{resource_name}' cannot use table_read_options "
-                        "until this source type reads via Spark JDBC (hana uses a different extract path today)"
-                    )
                 sch = (resource.database_schema or "").strip()
                 tbl = (resource.database_table or "").strip()
                 if not sch or not tbl:
@@ -1220,6 +1254,15 @@ class DefaultsConfig(BaseModel):
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
     )
+    log_full_row_count: bool = Field(
+        default=False,
+        description=(
+            "When True, run Spark df.count() for exact row totals in handler summaries and "
+            "allow the same for database extracts unless overridden per-resource. When False "
+            "(default), database extracts skip full counts unless table_read_options.log_exact_row_count "
+            "is set, and the handler uses a lightweight non-empty check instead of counting all rows."
+        ),
+    )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(
             destination="local",
@@ -1227,12 +1270,12 @@ class DefaultsConfig(BaseModel):
             write_mode="overwrite",
             compression="snappy",
             storage_root=".spine/local-output",
-            prefix="default/output",
+            prefix=None,
         ),
         description=(
-            "Default loading when ``defaults.loading`` is omitted from YAML: local Delta under "
-            "``.spine/local-output`` (relative to the repository root, next to ``config/`` in a normal checkout) "
-            "with placeholder prefix; override for S3 or real paths."
+            "Default loading merged into every resource unless the resource sets loading.enabled "
+            "to false. Prefix may be omitted; the handler sets ``{source_name}/{resource_name}`` "
+            "before load when prefix is unset for local or S3 destinations."
         ),
     )
     context: ContextConfig = Field(

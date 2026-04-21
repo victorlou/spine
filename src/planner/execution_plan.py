@@ -48,7 +48,7 @@ class ResourceMetadata:
     parent_fields: Set[str] = None  # Fields that need to be carried from parent context
     config: ResourceConfig = None  # Reference to the resource configuration
     backfill_config: Optional[BackfillConfig] = (
-        None  # Request-body date-range backfill, if configured
+        None  # Request-input date-range backfill (path/query/body), if configured
     )
 
     def estimate_request_count(self) -> Optional[int]:
@@ -561,10 +561,16 @@ class ExecutionPlan:
                         if source_config.field:
                             parent_fields.add(source_config.field)
 
-                # Backfill from body inputs: value may be a dict with "backfill" key
-                body_inputs = resource.get_inputs_by_location("body")
-                body_dict = {n: c.value for n, c in body_inputs.items()} if body_inputs else None
-                backfill_cfg = get_backfill_config(body_dict)
+                # Backfill: value may be a dict with "backfill" on path, query, or body inputs
+                inputs_for_backfill = resource.get_request_input_values_for_backfill()
+                try:
+                    backfill_cfg = get_backfill_config(inputs_for_backfill or None)
+                except ValueError as e:
+                    raise PlanningError(
+                        message="Invalid backfill configuration",
+                        operation="_build_resource_metadata",
+                        details={"resource": resource_id, "error": str(e)},
+                    ) from e
                 self._resource_metadata[resource_id] = ResourceMetadata(
                     source_name=source_name,
                     resource_name=resource_name,
@@ -855,7 +861,12 @@ class ExecutionPlan:
             dep_source, dep_resource = dep_id.split(".", 1)
             dep_config = self.get_resource_config(dep_source, dep_resource)
             dep_source_config = self.get_source_config(dep_source)
-            if dep_config and dep_config.loading and dep_source_config:
+            if (
+                dep_config
+                and dep_config.loading
+                and dep_config.loading.enabled
+                and dep_source_config
+            ):
                 result.append((dep_config.loading, dep_source_config.type))
         return result
 

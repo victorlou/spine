@@ -79,7 +79,7 @@ def run_pipeline(
         log_level: Optional log level to override environment variable
         selection: Optional selection structure mapping source names to resource name sets.
                    None means all resources, Set[str] means specific resource names.
-        limit: Optional limit on fetch operations per resource (for development/testing). When used, data is not saved to S3.
+        limit: Optional limit on fetch operations per resource (for development/testing). When set, data is not written to the configured loading destination.
         backfill: If True, use backfill date ranges for resources that have backfill config (manual backfill).
 
     Returns:
@@ -156,7 +156,7 @@ def run_pipeline(
                                 extra_fields={
                                     "source": source_name,
                                     "resource_name": resource_name,
-                                    "count": details["count"],
+                                    "count": details.get("count"),
                                     "location": details.get("location"),
                                 },
                             )
@@ -226,7 +226,10 @@ def run_pipeline(
     "--limit",
     "-l",
     type=click.IntRange(min=0),
-    help="Limit number of fetch operations per resource (useful for testing, 0=skip resource). When used, data is NOT saved to S3.",
+    help=(
+        "Limit number of fetch operations per resource (useful for testing, 0=skip resource). "
+        "When set, data is NOT written to the configured loading destination."
+    ),
     default=None,
 )
 @click.option(

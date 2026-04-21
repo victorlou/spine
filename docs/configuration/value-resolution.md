@@ -97,7 +97,7 @@ request_inputs:
 
 ## Backfill Config
 
-Backfill for body inputs uses a `value` dict with a `backfill` key. Jinja can be used for dynamic `end` and `limit`:
+Backfill for path, query, or body inputs uses a `value` dict with a `backfill` key. Jinja can be used for dynamic `end` and `limit`:
 
 ```yaml
 request_inputs:

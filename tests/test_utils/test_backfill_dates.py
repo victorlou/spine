@@ -35,7 +35,7 @@ def _make_config(inclusive: bool, limit_str: str) -> BackfillConfig:
         reference_key="endDate",
         driver_config=driver,
         reference_config=reference,
-        request_body_keys=["startDate", "endDate"],
+        field_keys=["startDate", "endDate"],
     )
 
 

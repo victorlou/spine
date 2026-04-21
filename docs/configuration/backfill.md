@@ -1,6 +1,6 @@
 # Backfill Configuration
 
-Date-range backfill splits historical data fetching into multiple API requests with fixed-size date windows. Configure backfill under **request_inputs** for body inputs: use a `value` that is a dict containing a **backfill** key (e.g. `request_inputs.startDate.value.backfill`).
+Date-range backfill splits historical data fetching into multiple API requests with fixed-size date windows. Configure backfill under **request_inputs** on **path**, **query**, or **body** inputs (same rules as normal inputs: GET defaults to query, POST defaults to body unless you set `location`). Use a `value` that is a dict containing a **backfill** key (e.g. `request_inputs.startDate.value.backfill`).
 
 ## Table of Contents
 
@@ -21,11 +21,13 @@ Backfill can run in two ways:
 
 ## Configuration Shape
 
-Backfill requires exactly two body request inputs (in `request_inputs`) whose `value` contains a **backfill** key:
+Backfill requires exactly two request inputs (in `request_inputs`, any of path / query / body) whose `value` contains a **backfill** key:
 
 - **Driver (STATIC_DATE)**: Defines the sequence of window starts. Requires `start`, `end`, and `increment`. Supports static YYYY-MM-DD strings or dynamic values (e.g. `type: DATE`, `operation: TODAY`).
 
 - **Reference (REFERENCE)**: Defines the window end for each start. References the driver field, adds `increment`, and caps at `limit`. Requires `field`, `increment`, and `limit`.
+
+Only **one** such pair is allowed per resource. You may place the driver on one location (e.g. query) and the reference on another (e.g. body); that still drives **one** sequence of windows per request batch, not two independent backfills or a Cartesian product. If the merged `request_inputs` contain more than one valid `STATIC_DATE` driver or more than one valid `REFERENCE`, plan build fails with a clear error.
 
 ## Date Pair Generation
 
@@ -63,7 +65,7 @@ This caps the last window's `endDate` at the latest date the API supports.
 
 ## Example
 
-Minimal backfill config (body request inputs with `value` containing `backfill`):
+Minimal backfill config (POST body example; `value` contains `backfill`):
 
 ```yaml
 request_inputs:
@@ -89,4 +91,4 @@ exclude_from_request_body:
   - endDate
 ```
 
-This produces 15-day windows from 2026-01-01 up to 2 days ago. List backfill driver/reference keys in **exclude_from_request_body** so they are not sent in the API body.
+This produces 15-day windows from 2026-01-01 up to 2 days ago. For **body** inputs, list backfill driver/reference keys in **exclude_from_request_body** when those keys must not appear in the JSON body (they still drive date windows and request context). Query and path parameters are sent as usual for each backfill window.

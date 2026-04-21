@@ -912,6 +912,22 @@ class ResourceConfig(BaseModel):
             if config.location == location
         }
 
+    def get_request_input_values_for_backfill(self) -> Dict[str, Any]:
+        """
+        Flat map of input name to configured ``value`` for backfill detection.
+
+        Merges path, then query, then body inputs. Input names are unique per
+        resource, so order only matters if that invariant were violated.
+
+        Returns:
+            Empty dict when there are no request_inputs.
+        """
+        merged: Dict[str, Any] = {}
+        for loc in ("path", "query", "body"):
+            for name, cfg in self.get_inputs_by_location(loc).items():
+                merged[name] = cfg.value
+        return merged
+
     def get_batch_inputs(self) -> Dict[str, RequestInputConfig]:
         """
         Get request inputs that require batching (any location).

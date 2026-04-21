@@ -384,7 +384,7 @@ class DynamicValueResolver:
 
         # Handle dictionary format for complex values
         if isinstance(value, dict) and not isinstance(value, (DynamicValue, ComplexDynamicValue)):
-            # Handle flat DATE format (type, operation, days at top level) - used by request_body backfill
+            # Handle flat DATE format (type, operation, days at top level) - used by backfill limits
             if "type" in value:
                 try:
                     dynamic_type = DynamicValueType(value["type"].upper())

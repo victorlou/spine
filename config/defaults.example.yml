@@ -57,4 +57,7 @@ defaults:
 
 # Named SQL files live under config/queries/ (operator-local, not committed).
 # See config/examples/sample_query.sql for a minimal template.
-queries: []
+queries:
+  - name: "example_query"
+    description: "An example SQL query loaded from a file."
+    file: "example_query.sql"

@@ -111,7 +111,7 @@ class ConfigSpark:
             "spark.sql.extensions": SPARK_EXTENSIONS,
             # Configure Delta catalog and Iceberg catalog
             "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
-            "spark.sql.catalog.iceberg": "org.apache.iceberg.spark.SparkSessionCatalog",
+            "spark.sql.catalog.iceberg": "org.apache.iceberg.spark.SparkCatalog",
             "spark.sql.catalog.iceberg.type": "hadoop",
             # We will be needing to configure warehouse root for `iceberg` that will happen while loading
             # "spark.sql.catalog.iceberg.warehouse": "<warehouse_path>" -- if s3: s3a://<bucket-name> else if local: file://<storage-root>

@@ -40,6 +40,13 @@ class RetryConfig(BaseModel):
     backoff_factor: float = Field(default=2.0, gt=1)
 
 
+class LoadingFormat(str, Enum):
+    """Supported loading formats."""
+
+    DELTA = "delta"
+    ICEBERG = "iceberg"
+
+
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
@@ -67,7 +74,7 @@ class LoadingConfig(BaseModel):
         ),
     )
     destination: str
-    format: str = "delta"
+    format: LoadingFormat = LoadingFormat.DELTA
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
     compression: Optional[str] = "snappy"
     bucket: Optional[str] = None  # For S3, can be inherited from defaults
@@ -112,6 +119,8 @@ class LoadingConfig(BaseModel):
                 )
 
             # Ensure 'data' is not included in the prefix
+            # Delta puts data in `/data` subdirectory under the prefix, so it should not be part of the user-provided prefix
+            # Iceberg puts data in the root of the prefix, so 'data' should also not be included to avoid confusion and potential conflicts
             if "data" in parts:
                 raise ValueError(
                     "prefix should not include 'data' directory - it will be automatically appended"

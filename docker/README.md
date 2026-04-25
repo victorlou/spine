@@ -183,3 +183,7 @@ docker build --platform linux/amd64 ...
 - The container uses Python 3.12 and OpenJDK 21 for Spark
 - Redis runs in-memory inside the container
 - Mount `.env` as read-only (`:ro`) for security
+- Iceberg support increases Spark startup dependency resolution and can modestly increase image-related pull/build time expectations because the Spark package list now includes the Iceberg runtime alongside Delta, Hadoop AWS, and ngdbc
+- No new Python packages were added for Iceberg support; the change is limited to Spark packages and Spark SQL extensions configured in `src/config/config_spark.py`
+- Iceberg writes use Spark DataSourceV2 functionality, and merge operations use Spark SQL functionality
+- We intentionally did not add PyIceberg because configuring PyIceberg would be a pain in the ass

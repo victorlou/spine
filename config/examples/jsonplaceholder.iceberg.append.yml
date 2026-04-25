@@ -1,0 +1,41 @@
+enabled: false
+type: "rest_api"
+base_url: "https://jsonplaceholder.typicode.com/"
+
+# Example source config for Iceberg append writes.
+#
+# This writes the JsonPlaceholder `posts` resource as an Iceberg table using
+# append mode. The `prefix` is warehouse-relative and becomes the table path
+# under the configured warehouse root. With the local example below, the loader
+# resolves this to a catalog-backed Iceberg table equivalent to:
+#   iceberg.jsonplaceholder.posts
+#
+# To switch this example to S3, replace the `loading` block with:
+#   destination: "s3"
+#   bucket: "your-bucket-name"
+#   format: "iceberg"
+#   write_mode: "append"
+#   prefix: "jsonplaceholder/posts"
+
+resources:
+  posts:
+    path: "posts"
+    method: "GET"
+    response_type: "json"
+
+    fields:
+      - name: "user_id"
+        source: "userId"
+      - name: "id"
+        source: "id"
+      - name: "title"
+        source: "title"
+      - name: "body"
+        source: "body"
+
+    loading:
+      destination: "local"
+      storage_root: ".spine/local-iceberg-warehouse"
+      format: "iceberg"
+      write_mode: "append"
+      prefix: "jsonplaceholder/posts"

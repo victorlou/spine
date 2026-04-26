@@ -1,26 +1,31 @@
 """
-Spark session bootstrap: Ivy package lists, Hadoop ``fs.*`` overlays, and PySpark env.
+Spark session bootstrap: package coordinates, Hadoop ``fs.*`` overlays, and launcher env.
 
 This module composes ``SparkSession`` builder settings. Runtime policy (YAML + host detection)
-lives in :mod:`src.config.spark_runtime`; process lifecycle and AWS credential loading live in
-:mod:`src.utils.spark_manager`.
+lives in :mod:`src.config.spark_runtime`; Spark session lifecycle and per-destination credential
+loading (S3 via :mod:`src.utils.spark_manager`) live alongside that module.
 
-**Side effect:** :meth:`SparkSessionConf.get_java_options` sets ``os.environ`` entries consumed
-by the PySpark JVM launcher (``PYSPARK_SUBMIT_ARGS``, ``SPARK_SUBMIT_OPTS``). Call it only from
-session initialization, not at import time; tests that assert on env should reset or isolate.
+GCS is wired through a single path: when connector mode is ``packages`` we append the official
+shaded connector JAR URL to ``spark.jars`` and default to
+``spark.hadoop.fs.gs.auth.type=APPLICATION_DEFAULT``. This matches local ADC and service-account
+flows while still allowing metadata auth via ``SPINE_GCS_AUTH_TYPE`` on managed runtimes.
 """
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 from src.config.config_models import SparkRuntimeConfig
-from src.config.spark_runtime import ResolvedSparkRuntime, resolve_spark_runtime
+from src.config.spark_runtime import (
+    ManagedSparkPlatform,
+    ResolvedSparkRuntime,
+    resolve_spark_runtime,
+)
 
 # Maven coordinates Spark resolves at startup (Ivy). Keep ngdbc pin aligned with smoke testing.
 _HADOOP_AWS_PKG = "org.apache.hadoop:hadoop-aws:3.3.4"
 _HADOOP_AZURE_PKG = "org.apache.hadoop:hadoop-azure:3.3.4"
-_GCS_CONNECTOR_PKG = "com.google.cloud.bigdataoss:gcs-connector:hadoop3-2.2.17"
 _DELTA_PKG = "io.delta:delta-spark_2.12:3.1.0"
 _ICEBERG_PKG = "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.1"
 _SAP_NGDBC_PKG = "com.sap.cloud.db.jdbc:ngdbc:2.23.10"
@@ -30,16 +35,38 @@ _ICEBERG_EXTENSIONS = "org.apache.iceberg.spark.extensions.IcebergSparkSessionEx
 _DELTA_EXTENSIONS = "io.delta.sql.DeltaSparkSessionExtension"
 SPARK_EXTENSIONS = ",".join([_ICEBERG_EXTENSIONS, _DELTA_EXTENSIONS])
 
-# (loading destination id, ResolvedSparkRuntime field, static Maven coord or None for GCS dynamic)
-_CONNECTOR_IVY_SPECS: tuple[tuple[str, str, Optional[str]], ...] = (
+# (loading destination id, ResolvedSparkRuntime field, Ivy Maven coordinate for --packages)
+_CONNECTOR_IVY_SPECS: tuple[tuple[str, str, str], ...] = (
     ("s3", "s3_connector_mode", _HADOOP_AWS_PKG),
     ("azure_blob", "azure_connector_mode", _HADOOP_AZURE_PKG),
-    ("gcs", "gcs_connector_mode", None),
+)
+
+# Shaded GCS connector: avoids Guava skew vs Spark when the non-shaded Ivy artifact is used.
+# Spark does not accept Maven classifiers in --packages; use spark.jars + HTTPS URL instead.
+_GCS_CONNECTOR_SHADED_JAR_DEFAULT = (
+    "https://repo1.maven.org/maven2/com/google/cloud/bigdataoss/gcs-connector/"
+    "hadoop3-2.2.17/gcs-connector-hadoop3-2.2.17-shaded.jar"
 )
 
 
-def _gcs_package_coordinate() -> str:
-    return os.getenv("SPARK_GCS_CONNECTOR_PACKAGE", _GCS_CONNECTOR_PKG).strip()
+def _gcs_connector_jar_url() -> str:
+    """HTTPS URL for the GCS connector JAR appended to ``spark.jars`` when mode is ``packages``."""
+    return os.getenv("SPARK_GCS_CONNECTOR_JAR_URL", _GCS_CONNECTOR_SHADED_JAR_DEFAULT).strip()
+
+
+def _merge_gcs_shaded_jar_into_config(
+    config: Dict[str, Any], destinations: Set[str], resolved: ResolvedSparkRuntime
+) -> None:
+    if "gcs" not in destinations or resolved.gcs_connector_mode != "packages":
+        return
+    jar = _gcs_connector_jar_url()
+    if not jar:
+        return
+    existing = (config.get("spark.jars") or "").strip()
+    pieces = [p.strip() for p in existing.split(",") if p.strip()]
+    if jar not in pieces:
+        pieces.append(jar)
+    config["spark.jars"] = ",".join(pieces)
 
 
 def _effective_resolved(resolved: Optional[ResolvedSparkRuntime]) -> ResolvedSparkRuntime:
@@ -47,13 +74,62 @@ def _effective_resolved(resolved: Optional[ResolvedSparkRuntime]) -> ResolvedSpa
 
 
 def _hadoop_filesystem_impl_layer(destinations: Set[str]) -> Dict[str, str]:
-    """Shared ``fs.*.impl`` entries for GCS and ABFS (identical for local and managed Spark)."""
+    """Shared ``fs.*.impl`` and GCS auth entries for ABFS/GCS (local and managed Spark)."""
     layer: Dict[str, str] = {}
     if "azure_blob" in destinations:
         layer["spark.hadoop.fs.abfs.impl"] = "org.apache.hadoop.fs.azurebfs.AzureBlobFileSystem"
     if "gcs" in destinations:
         layer["spark.hadoop.fs.gs.impl"] = "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
+        # Connector default auth is COMPUTE_ENGINE (GCE metadata). Off GCP that often blocks
+        # indefinitely while probing metadata. APPLICATION_DEFAULT uses ADC: service account
+        # JSON from GOOGLE_APPLICATION_CREDENTIALS, user creds from gcloud, or metadata on GCE/GKE.
+        auth_type = (os.getenv("SPINE_GCS_AUTH_TYPE") or "APPLICATION_DEFAULT").strip()
+        if auth_type:
+            layer["spark.hadoop.fs.gs.auth.type"] = auth_type
+        if auth_type.upper() == "APPLICATION_DEFAULT":
+            gac = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+            if gac and Path(gac).expanduser().is_file():
+                layer["spark.hadoop.google.cloud.auth.service.account.json.keyfile"] = str(
+                    Path(gac).expanduser()
+                )
+            else:
+                adc = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
+                if adc.is_file():
+                    layer["spark.hadoop.google.cloud.auth.service.account.json.keyfile"] = str(adc)
     return layer
+
+
+def _embedded_driver_overlays(resolved: ResolvedSparkRuntime) -> Dict[str, Any]:
+    """
+    In-process Spark (implicit ``local[*]``) needs a bindable driver address.
+
+    The explicit-key path already sets ``spark.driver.*`` in :meth:`SparkSessionConf.get_local_configs`.
+    The managed IAM path historically omitted them, which breaks on some Linux cloud VMs and
+    containers where Spark would otherwise pick a non-bindable hostname.
+
+    Databricks and EMR provide cluster-managed Spark; do not inject these there.
+    """
+    if resolved.managed_platform in (
+        ManagedSparkPlatform.DATABRICKS,
+        ManagedSparkPlatform.EMR,
+    ):
+        return {}
+    overlays: Dict[str, Any] = {"spark.ui.enabled": "false"}
+    if resolved.managed_platform in (
+        ManagedSparkPlatform.KUBERNETES,
+        ManagedSparkPlatform.ECS,
+    ):
+        bind = os.getenv("SPINE_SPARK_DRIVER_BIND_ADDRESS", "0.0.0.0")
+        host = os.getenv(
+            "SPINE_SPARK_DRIVER_HOST",
+            os.getenv("SPARK_LOCAL_IP", "127.0.0.1"),
+        )
+    else:
+        bind = os.getenv("SPINE_SPARK_DRIVER_BIND_ADDRESS", "127.0.0.1")
+        host = os.getenv("SPINE_SPARK_DRIVER_HOST", "127.0.0.1")
+    overlays["spark.driver.bindAddress"] = bind
+    overlays["spark.driver.host"] = host
+    return overlays
 
 
 def _s3a_endpoint_and_filesystem(s3_region: str) -> Dict[str, str]:
@@ -63,47 +139,6 @@ def _s3a_endpoint_and_filesystem(s3_region: str) -> Dict[str, str]:
         "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.path.style.access": "true",
     }
-
-
-def _readiness_note_s3(resolved: ResolvedSparkRuntime, use_explicit_credentials: bool) -> str:
-    auth = (
-        "explicit Spark S3A keys from the configured credential path"
-        if use_explicit_credentials
-        else "DefaultAWSCredentialsProviderChain (IAM role, profile, environment, or web identity)"
-    )
-    return (
-        "S3 destination requires S3A filesystem settings and AWS auth in Spark "
-        f"({auth}). Resolved hadoop-aws connector mode={resolved.s3_connector_mode!r} "
-        "(``packages`` pulls Ivy coordinates; ``external`` assumes the cluster provides hadoop-aws). "
-        "S3A endpoint region follows the AWS credential chain or standard AWS environment variables, not "
-        "``defaults.spark_runtime``."
-    )
-
-
-def _readiness_note_gcs(resolved: ResolvedSparkRuntime) -> str:
-    return (
-        "GCS destination requires Hadoop GCS connector and Google auth in the Spark runtime "
-        f"(resolved mode={resolved.gcs_connector_mode!r})."
-    )
-
-
-def _readiness_note_azure(resolved: ResolvedSparkRuntime) -> str:
-    return (
-        "Azure Blob destination requires ABFS connector and storage auth in the Spark runtime "
-        f"(resolved mode={resolved.azure_connector_mode!r})."
-    )
-
-
-def _readiness_note_local() -> str:
-    return "Local destination uses file://; ensure storage_root exists and is writable."
-
-
-_READINESS_NOTE_BUILDERS = {
-    "s3": lambda _d, r, u: _readiness_note_s3(r, u),
-    "gcs": lambda _d, r, _u: _readiness_note_gcs(r),
-    "azure_blob": lambda _d, r, _u: _readiness_note_azure(r),
-    "local": lambda _d, _r, _u: _readiness_note_local(),
-}
 
 
 class SparkSessionConf:
@@ -158,12 +193,7 @@ class SparkSessionConf:
                 continue
             if getattr(resolved, mode_attr) != "packages":
                 continue
-            if static_coord is not None:
-                packages.append(static_coord)
-            else:
-                coord = _gcs_package_coordinate()
-                if coord:
-                    packages.append(coord)
+            packages.append(static_coord)
 
         deduped: list[str] = []
         seen = set()
@@ -172,21 +202,6 @@ class SparkSessionConf:
                 deduped.append(pkg)
                 seen.add(pkg)
         return deduped
-
-    @staticmethod
-    def get_runtime_readiness_errors(
-        destinations: Set[str], resolved: Optional[ResolvedSparkRuntime] = None
-    ) -> list[str]:
-        errors: list[str] = []
-        eff = _effective_resolved(resolved)
-        if "gcs" in destinations and eff.gcs_connector_mode == "packages":
-            pkg = _gcs_package_coordinate()
-            if not pkg:
-                errors.append(
-                    "GCS destination requires a non-empty Maven coordinate when resolved connector mode is "
-                    "'packages' (set defaults.spark_runtime / env SPARK_GCS_CONNECTOR_PACKAGE)."
-                )
-        return errors
 
     @staticmethod
     def get_local_configs(
@@ -223,6 +238,7 @@ class SparkSessionConf:
                 config["spark.hadoop.fs.s3a.session.token"] = aws_session_token
 
         config.update(_hadoop_filesystem_impl_layer(destinations))
+        _merge_gcs_shaded_jar_into_config(config, destinations, eff)
         return config
 
     @staticmethod
@@ -231,13 +247,34 @@ class SparkSessionConf:
         resolved: Optional[ResolvedSparkRuntime] = None,
         use_explicit_credentials: bool = False,
     ) -> list[str]:
+        # Backward-compatible shim while callers transition to startup_summary().
+        _ = (destinations, resolved, use_explicit_credentials)
+        return []
+
+    @staticmethod
+    def startup_summary(
+        destinations: Set[str],
+        use_explicit_credentials: bool,
+        resolved: Optional[ResolvedSparkRuntime] = None,
+    ) -> str:
         eff = _effective_resolved(resolved)
-        notes: list[str] = []
-        for dest in sorted(destinations):
-            builder = _READINESS_NOTE_BUILDERS.get(dest)
-            if builder:
-                notes.append(builder(dest, eff, use_explicit_credentials))
-        return notes
+        parts = [f"Spark destinations={sorted(destinations)}"]
+        if "gcs" in destinations:
+            parts.append(f"gcs_mode={eff.gcs_connector_mode}")
+            parts.append(
+                f"gcs_auth_type={(os.getenv('SPINE_GCS_AUTH_TYPE') or 'APPLICATION_DEFAULT').strip()}"
+            )
+            if eff.gcs_connector_mode == "packages":
+                parts.append(f"gcs_connector_jar={_gcs_connector_jar_url() or '<empty>'}")
+        if "s3" in destinations:
+            parts.append(
+                "s3_auth=explicit_keys" if use_explicit_credentials else "s3_auth=default_chain"
+            )
+            parts.append(f"s3_mode={eff.s3_connector_mode}")
+        if "azure_blob" in destinations:
+            parts.append(f"azure_mode={eff.azure_connector_mode}")
+        parts.append(f"managed_platform={eff.managed_platform.value}")
+        return "; ".join(parts)
 
     @staticmethod
     def get_configs_for_destinations(
@@ -274,6 +311,7 @@ class SparkSessionConf:
     ) -> Dict[str, Any]:
         config = {
             **SparkSessionConf._base_configs(),
+            **_embedded_driver_overlays(resolved),
             "spark.jars.packages": ",".join(
                 SparkSessionConf._resolve_spark_packages(destinations, resolved)
             ),
@@ -284,4 +322,5 @@ class SparkSessionConf:
             )
             config.update(_s3a_endpoint_and_filesystem(s3_region))
         config.update(_hadoop_filesystem_impl_layer(destinations))
+        _merge_gcs_shaded_jar_into_config(config, destinations, resolved)
         return config

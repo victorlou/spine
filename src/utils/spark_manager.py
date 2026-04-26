@@ -106,29 +106,20 @@ class SparkManager:
                 self.aws_region = ""
                 self.use_explicit_credentials = False
                 if "s3" in destinations:
-                    try:
-                        self._load_credentials()
-                    except SparkError as e:
-                        self._logger.warning(
-                            "AWS credential initialization skipped; continuing with default Spark S3 credential chain",
-                            extra_fields={"error": str(e)},
-                        )
+                    # Fail fast: a missing AWS credential chain when S3 is a
+                    # configured destination must stop the pipeline before
+                    # ingestion. The unified destination preflight then probes
+                    # the actual bucket reachability for s3/gcs/azure_blob.
+                    self._load_credentials()
 
                 SparkSessionConf.get_java_options(destinations, resolved)
-
-                readiness_errors = SparkSessionConf.get_runtime_readiness_errors(
-                    destinations, resolved
-                )
-                if readiness_errors:
-                    raise SparkError(
-                        message="; ".join(readiness_errors),
-                        operation="init_session",
+                self._logger.info(
+                    SparkSessionConf.startup_summary(
+                        destinations=destinations,
+                        use_explicit_credentials=self.use_explicit_credentials,
+                        resolved=resolved,
                     )
-
-                for note in SparkSessionConf.get_runtime_readiness_notes(
-                    destinations, resolved, use_explicit_credentials=self.use_explicit_credentials
-                ):
-                    self._logger.info(note)
+                )
 
                 configs = SparkSessionConf.get_configs_for_destinations(
                     destinations=destinations,

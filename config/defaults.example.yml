@@ -21,6 +21,7 @@ defaults:
     # Omit prefix to write under ``{source_name}/{resource_name}`` (set at runtime).
 
   # For Amazon S3 instead, use something like:
+  # (Variable names below are operator-defined examples, not Spine-reserved env vars.)
   # loading:
   #   destination: "s3"
   #   format: "delta"
@@ -31,6 +32,7 @@ defaults:
   #   prefix: "my_source/my_resource"
   #
   # For GCS instead:
+  # (Use any env var name your team prefers; it only needs to match `${...}` references.)
   # loading:
   #   destination: "gcs"
   #   format: "delta"
@@ -86,6 +88,8 @@ defaults:
   #   s3_connector_mode: "auto"
   #   gcs_connector_mode: "auto"
   #   azure_connector_mode: "auto"
+  # GCS auth defaults to APPLICATION_DEFAULT (ADC/service-account/workload identity).
+  # Set SPINE_GCS_AUTH_TYPE=COMPUTE_ENGINE only when you intentionally require metadata auth.
 
 # Named SQL files live under config/queries/ (operator-local, not committed).
 # See config/examples/sample_query.sql for a minimal template.

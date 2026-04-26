@@ -421,6 +421,14 @@ class ObjectStoreLoader(BaseLoader):
         if options_copy:
             writer = writer.options(**options_copy)
 
+        is_delta = format_type == LoadingFormat.DELTA or format_type == "delta"
+        if is_delta:
+            t0 = time.perf_counter()
+            self.logger.trace(
+                "Delta write starting",
+                extra_fields={"path": path, "iceberg_catalog": iceberg},
+            )
+
         # Iceberg catalog writes must use a catalog table identifier, not a filesystem path.
         if iceberg:
             if not iceberg_warehouse_path:
@@ -432,6 +440,17 @@ class ObjectStoreLoader(BaseLoader):
             writer.saveAsTable(table_identifier)
         else:
             writer.save(path)
+
+        if is_delta:
+            elapsed = time.perf_counter() - t0
+            self.logger.debug(
+                "Delta write finished",
+                extra_fields={
+                    "path": path,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "iceberg_catalog": iceberg,
+                },
+            )
 
     def _cleanup_temp_dir(self, store: SparkFilesystemObjectStore, temp_path: str) -> None:
         """

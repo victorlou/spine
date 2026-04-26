@@ -1356,7 +1356,7 @@ class SparkRuntimeConfig(BaseModel):
     override YAML when set so CI and bespoke images can force behavior without editing pipeline files.
 
     S3A endpoint region is not configured here; it follows the AWS credential chain, ``AWS_REGION`` /
-    ``AWS_DEFAULT_REGION``, and ``AWSSettings`` (see deployment docs), keeping object-store knobs parallel.
+    ``AWS_DEFAULT_REGION``, and SparkManager when ``s3`` is a destination (see deployment docs).
     """
 
     profile: SparkRuntimeProfile = Field(

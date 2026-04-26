@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from src.config.config_models import SparkRuntimeConfig
 from src.config.spark_runtime import resolve_spark_runtime
 from src.utils.exceptions import SparkError
@@ -22,8 +24,14 @@ def test_spark_manager_construction_does_not_eagerly_load_aws_credentials(monkey
     assert manager is not None
 
 
-def test_spark_manager_init_session_falls_back_when_aws_credentials_fail(monkeypatch) -> None:
-    # Ensure singleton state is clean for this test
+def test_spark_manager_init_session_fails_fast_when_aws_credentials_fail(monkeypatch) -> None:
+    """Missing AWS credentials with an S3 destination must stop init_session immediately.
+
+    The previous behavior (warn + fall back to Spark's default credential chain) silently
+    deferred the failure to actual data write time. The unified destination preflight in
+    src.loader.destination_preflight is the single source of truth for "can we reach the
+    bucket"; the credential loader is no longer optional when S3 is in scope.
+    """
     SparkManager._instance = None
     SparkManager._spark = None
 
@@ -33,26 +41,15 @@ def test_spark_manager_init_session_falls_back_when_aws_credentials_fail(monkeyp
         raise SparkError(message="mock aws auth failure", operation="_load_credentials")
 
     monkeypatch.setattr(manager, "_load_credentials", _raise_spark_error)
-
     monkeypatch.setattr(
         "src.utils.spark_manager.SparkSessionConf.get_java_options", lambda *_: None
     )
     monkeypatch.setattr("src.utils.spark_manager.atexit.register", lambda *args, **kwargs: None)
-
-    observed = {}
-
-    def _mock_get_configs(**kwargs):
-        observed.update(kwargs)
-        return {}
-
     monkeypatch.setattr(
-        "src.utils.spark_manager.SparkSessionConf.get_configs_for_destinations", _mock_get_configs
+        "src.utils.spark_manager.SparkSessionConf.get_configs_for_destinations", lambda **_: {}
     )
     monkeypatch.setattr(
-        "src.utils.spark_manager.SparkSessionConf.get_runtime_readiness_errors", lambda *_: []
-    )
-    monkeypatch.setattr(
-        "src.utils.spark_manager.SparkSessionConf.get_runtime_readiness_notes", lambda *a, **k: []
+        "src.utils.spark_manager.SparkSessionConf.startup_summary", lambda **_: "ok"
     )
 
     class _FakeBuilder:
@@ -67,17 +64,13 @@ def test_spark_manager_init_session_falls_back_when_aws_credentials_fail(monkeyp
     )
 
     rt = resolve_spark_runtime(SparkRuntimeConfig())
-    session = manager.init_session(destinations={"s3"}, spark_runtime=rt)
+    with pytest.raises(SparkError, match="mock aws auth failure"):
+        manager.init_session(destinations={"s3"}, spark_runtime=rt)
 
-    assert session is not None
-    assert observed["use_explicit_credentials"] is False
-    assert observed["aws_access_key"] == ""
-    assert observed["aws_secret_key"] == ""
-    assert observed["destinations"] == {"s3"}
+    assert manager._spark is None
 
-    # Avoid shutdown-time logging noise from singleton teardown in test process.
-    manager._spark = None
     SparkManager._instance = None
+    SparkManager._spark = None
 
 
 def test_spark_manager_skips_aws_credentials_when_s3_not_requested(monkeypatch) -> None:
@@ -95,13 +88,10 @@ def test_spark_manager_skips_aws_credentials_when_s3_not_requested(monkeypatch) 
     )
     monkeypatch.setattr("src.utils.spark_manager.atexit.register", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "src.utils.spark_manager.SparkSessionConf.get_runtime_readiness_errors", lambda *_: []
-    )
-    monkeypatch.setattr(
-        "src.utils.spark_manager.SparkSessionConf.get_runtime_readiness_notes", lambda *a, **k: []
-    )
-    monkeypatch.setattr(
         "src.utils.spark_manager.SparkSessionConf.get_configs_for_destinations", lambda **_: {}
+    )
+    monkeypatch.setattr(
+        "src.utils.spark_manager.SparkSessionConf.startup_summary", lambda **_: "ok"
     )
 
     class _FakeBuilder:

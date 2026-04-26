@@ -1,14 +1,20 @@
 """
 AWS credential management utility.
-Provides centralized handling of AWS credentials with support for
-AWS profiles, SSO, environment variables, and IAM roles.
+
+Loads AWS credentials via boto3's default credential chain (env vars, profiles,
+SSO caches, IAM roles) and exposes them so the local-dev S3A path can hand
+explicit keys to Spark when the runtime cannot use the JVM's own credential
+chain (typically SSO profile caches on a developer machine).
+
+Reachability and permission checks happen in
+``src.loader.destination_preflight`` against each effective bucket, not here.
+This module is a credential **loader** only.
 """
 
 import os
 from typing import Any, Dict
 
 import boto3
-from botocore.exceptions import ClientError
 
 from src.utils.exceptions import AWSError
 from src.utils.logger import get_logger
@@ -67,8 +73,6 @@ class AWSCredentialManager:
                 },
             )
 
-            self._validate_credentials()
-
         except AWSError:
             raise
         except Exception as e:
@@ -87,35 +91,6 @@ class AWSCredentialManager:
                 message=message,
                 operation="_load_credentials",
                 service="iam",
-                original_error=e,
-            ) from e
-
-    def _validate_credentials(self) -> None:
-        """
-        Validate AWS credentials by making a test API call.
-
-        Raises:
-            AWSError: If credentials are invalid
-        """
-        try:
-            sts = self.session.client("sts")
-            identity = sts.get_caller_identity()
-
-            self._logger.debug(
-                "Successfully validated AWS credentials",
-                extra_fields={
-                    "account_id": identity["Account"],
-                    "arn": identity["Arn"],
-                    "user_id": identity["UserId"],
-                },
-            )
-        except ClientError as e:
-            error_msg = f"Failed to validate AWS credentials: {e!s}"
-            self._logger.error(error_msg)
-            raise AWSError(
-                message=error_msg,
-                operation="_validate_credentials",
-                service="sts",
                 original_error=e,
             ) from e
 

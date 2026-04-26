@@ -30,6 +30,7 @@ from src.config.config_models import (
 )
 from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
+from src.loader.destination_preflight import preflight_destinations
 from src.loader.loader_factory import LoaderFactory
 from src.parser.spark_parser import SparkParser
 from src.planner.database_request_context import (
@@ -148,6 +149,31 @@ class DynamicHandler(BaseHandler):
             if not prefix:
                 return loading.model_copy(update={"prefix": f"{source_name}/{resource_name}"})
         return loading
+
+    def _collect_effective_loading_configs(self) -> List[LoadingConfig]:
+        """
+        Effective ``LoadingConfig`` for every resource in the execution plan.
+
+        Skips resources whose loading is disabled. The returned list is
+        intentionally not deduplicated; callers like the destination preflight
+        do their own dedup so the same bucket/root is probed once even when
+        many resources share it.
+        """
+        configs: List[LoadingConfig] = []
+        for stage in self.execution_plan.stages:
+            for resource_meta in stage.resources:
+                source_config = self.execution_plan.get_source_config(resource_meta.source_name)
+                if source_config is None:
+                    continue
+                resource_config = source_config.resources.get(resource_meta.resource_name)
+                if resource_config is None:
+                    continue
+                eff = self._resolve_resource_loading(
+                    resource_meta.source_name, resource_meta.resource_name, resource_config
+                )
+                if eff is not None:
+                    configs.append(eff)
+        return configs
 
     def _apply_request_limit(
         self,
@@ -2362,6 +2388,16 @@ class DynamicHandler(BaseHandler):
         try:
             if hasattr(signal, "SIGTERM"):
                 _prev_sigterm = signal.signal(signal.SIGTERM, _sigterm_handler)
+
+            # Fail before any ingestion when a configured destination is unreachable
+            # or missing credentials. Read-only probe across s3/gcs/azure_blob/local
+            # via the unified destination_preflight seam.
+            preflight_destinations(
+                self.spark,
+                self._collect_effective_loading_configs(),
+                write_probe=False,
+            )
+
             # Process each stage in order
             for stage in self.execution_plan.stages:
                 self.logger.info(
@@ -2510,9 +2546,18 @@ class DynamicHandler(BaseHandler):
                     pass
             try:
                 audit_recorder = getattr(self, "_audit_recorder", None)
-                control_bucket = os.getenv("S3_CONTROL_BUCKET")
-                if audit_recorder is not None and self.spark is not None and control_bucket:
-                    audit_recorder.flush(self.spark, control_bucket)
+                if audit_recorder is not None and self.spark is not None:
+                    destinations = self.settings.loading_destinations or set()
+                    flushed = False
+                    if "gcs" in destinations:
+                        g_bucket = os.getenv("GCS_CONTROL_BUCKET")
+                        if g_bucket:
+                            audit_recorder.flush(self.spark, g_bucket, filesystem_scheme="gs")
+                            flushed = True
+                    if not flushed and "s3" in destinations:
+                        s_bucket = os.getenv("S3_CONTROL_BUCKET")
+                        if s_bucket:
+                            audit_recorder.flush(self.spark, s_bucket, filesystem_scheme="s3a")
             except KeyboardInterrupt:
                 self.logger.warning("Audit flush interrupted")
                 raise
@@ -2561,10 +2606,6 @@ class DynamicHandler(BaseHandler):
                 },
             )
 
-            # Track unique S3 buckets and local storage roots to validate
-            s3_buckets: set[str] = set()
-            local_storage_roots: set[str] = set()
-
             # Get the list of sources that are actually part of the execution plan
             selected_sources = {
                 resource_meta.source_name
@@ -2598,32 +2639,15 @@ class DynamicHandler(BaseHandler):
                                     f"Invalid schema field in {resource_name}: name is required"
                                 )
 
-                    # Validate loading configuration (effective merge + auto prefix)
-                    eff_loading = self._resolve_resource_loading(
-                        source_name, resource_name, resource_config
-                    )
-                    if eff_loading:
-                        if eff_loading.destination == "s3":
-                            s3_buckets.add(eff_loading.s3_bucket)
-                        elif eff_loading.destination == "local":
-                            local_storage_roots.add(eff_loading.storage_root)
-                        elif eff_loading.destination in ("gcs", "azure_blob"):
-                            self.logger.info(
-                                "Cloud loading destination preflight completed without remote connectivity probe",
-                                extra_fields={
-                                    "resource_name": resource_name,
-                                    "destination": eff_loading.destination,
-                                },
-                            )
-
                 self.logger.info(f"Successfully validated source: {source_name}")
 
-            # Test S3 connectivity for all unique buckets
-            for bucket in s3_buckets:
-                self._test_s3_connectivity(bucket)
-
-            for storage_root in local_storage_roots:
-                self._test_local_storage_writable(storage_root)
+            # Single seam for cloud/local destination preflight; write probe runs only
+            # in --validate-only so regular pipeline runs do not mutate the bucket.
+            preflight_destinations(
+                self.spark,
+                self._collect_effective_loading_configs(),
+                write_probe=True,
+            )
 
             self.logger.info("Configuration validation completed successfully")
 

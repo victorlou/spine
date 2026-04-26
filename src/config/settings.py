@@ -13,8 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.config.config_loader import ConfigLoader
 from src.config.config_models import PipelineConfig
 from src.config.repository_root import repository_root
-from src.utils.aws_credentials import AWSCredentialManager
-from src.utils.exceptions import AWSError, ConfigError
+from src.utils.exceptions import ConfigError
 from src.utils.logger import get_logger
 
 # Initialize logger
@@ -71,28 +70,6 @@ class APISettings(BaseSettings):
             self.MAX_RETRIES = config.defaults.retry.max_attempts
             self.INITIAL_DELAY = config.defaults.retry.initial_delay
             self.RETRY_BACKOFF = config.defaults.retry.backoff_factor
-
-
-class AWSSettings(BaseSettings):
-    """AWS-specific settings."""
-
-    model_config = SettingsConfigDict(extra="ignore")
-
-    REGION: str = Field(default="us-east-1", description="AWS region")
-
-    def __init__(self, **kwargs):
-        """Initialize AWS settings using the credential manager."""
-        super().__init__(**kwargs)
-        try:
-            # Use the singleton credential manager
-            cred_manager = AWSCredentialManager()
-            # Region from credential manager takes precedence
-            self.REGION = cred_manager.region
-        except AWSError as e:
-            logger.warning(
-                "Failed to initialize AWS settings; using default region",
-                extra_fields={"error": str(e), "region": self.REGION},
-            )
 
 
 class DatabricksSettings(BaseSettings):
@@ -155,7 +132,6 @@ class Settings(BaseSettings):
 
     # Nested settings
     spark: SparkSettings = Field(default_factory=SparkSettings)
-    aws: AWSSettings = Field(default_factory=AWSSettings)
     api: APISettings = Field(default_factory=APISettings)
     databricks_settings: DatabricksSettings = Field(default_factory=DatabricksSettings)
 

@@ -119,8 +119,7 @@ class LoadingConfig(BaseModel):
                 )
 
             # Ensure 'data' is not included in the prefix
-            # Delta puts data in `/data` subdirectory under the prefix, so it should not be part of the user-provided prefix
-            # Iceberg puts data in the root of the prefix, so 'data' should also not be included to avoid confusion and potential conflicts
+            # Delta appends /data under the prefix; Iceberg writes to the prefix root — neither should include 'data' explicitly
             if "data" in parts:
                 raise ValueError(
                     "prefix should not include 'data' directory - it will be automatically appended"

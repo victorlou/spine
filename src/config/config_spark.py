@@ -113,8 +113,6 @@ class ConfigSpark:
             "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
             "spark.sql.catalog.iceberg": "org.apache.iceberg.spark.SparkCatalog",
             "spark.sql.catalog.iceberg.type": "hadoop",
-            # We will be needing to configure warehouse root for `iceberg` that will happen while loading
-            # "spark.sql.catalog.iceberg.warehouse": "<warehouse_path>" -- if s3: s3a://<bucket-name> else if local: file://<storage-root>
             "spark.hadoop.fs.s3a.aws.credentials.provider": "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",
             "spark.hadoop.fs.s3a.endpoint": f"s3.{region}.amazonaws.com",
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",

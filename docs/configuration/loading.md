@@ -10,6 +10,11 @@
   - [Overwrite](#overwrite)
   - [Append](#append)
   - [Merge (Upsert)](#merge-upsert)
+- [Iceberg](#iceberg)
+  - [Append](#append-1)
+  - [Overwrite](#overwrite-1)
+  - [Merge (preview)](#merge-preview)
+  - [Current limitations](#current-limitations)
 - [Quick reference](#quick-reference)
 
 ## Destinations
@@ -108,6 +113,62 @@ loading:
 - Supports composite keys (multiple columns)
 - Tables are created automatically if they don't exist
 
+## Iceberg
+
+When using Iceberg format, Spine writes through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, and for local writes it is rooted at the configured `storage_root`. Spine first resolves the final table path from that warehouse root plus the configured `prefix`, then removes the warehouse root from the resolved path and converts the remaining path into a catalog table identifier by replacing `/` with `.` and prefixing it with `iceberg.`. For example, if the warehouse root is `s3a://my-bucket` and the resolved table path is `a://my-bucket/source/resource`, Spine derives the catalog table identifier `iceberg.source.resource`.
+
+**Available modes**: `overwrite`, `append`, `merge`
+
+### Append
+
+Append writes add rows to the existing Iceberg table, creating the table on first write when it does not already exist.
+
+```yaml
+loading:
+  destination: "local"
+  format: "iceberg"
+  write_mode: "append"
+  storage_root: ".spine/local-iceberg-warehouse"
+  prefix: "source/resource"
+```
+
+### Overwrite
+
+Overwrite replaces the contents of the target Iceberg table.
+
+```yaml
+loading:
+  destination: "s3"
+  format: "iceberg"
+  write_mode: "overwrite"
+  bucket: "my-bucket"
+  prefix: "source/resource"
+```
+
+### Merge (preview)
+
+Merge mode performs an Iceberg `MERGE INTO` using the configured `merge_keys`. If the table does not exist yet, Spine creates it first and later runs merges against the catalog table.
+
+```yaml
+loading:
+  destination: "s3"
+  format: "iceberg"
+  write_mode: "merge"
+  merge_keys: ["id"]
+  bucket: "my-bucket"
+  prefix: "source/resource"
+```
+
+### Current limitations
+
+Iceberg support is still in an early merge-support phase. Plan around the following current behavior:
+
+- `merge_keys` is required for Iceberg merge mode
+- Merge updates only columns present in both the source data and the existing target table
+- Merge inserts are shaped to the current target schema; target-only columns are filled with typed `NULL`
+- The current merge path does not auto-evolve the target schema before `MERGE INTO`; if the source introduces new columns, use append/overwrite first or evolve the table separately
+- Iceberg table existence is currently detected from filesystem metadata under the resolved table path
+
 ## Quick reference
 
 | `destination` | Required fields | Notes |
@@ -115,5 +176,7 @@ loading:
 | `s3` | `bucket`, `prefix` | `prefix` uses the `source/resource` shape described above. Set **`destination: "s3"`** on the resource (or in defaults) whenever you set `bucket`; shallow merge with **`destination: local`** defaults would otherwise keep `local`. |
 | `local` | `storage_root`, `prefix` | `storage_root` may be absolute, or **relative to the repository root** (directory containing `src/`). Relative values are resolved when the config is loaded. |
 | *(omitted `defaults.loading`)* | *(built-in default)* | Same as **`local`** with **`storage_root: ".spine/local-output"`** (resolved under the repository root) and **`prefix: "default/output"`**; override per resource or in **`defaults.yml`**. |
+
+For table formats, `format: "delta"` and `format: "iceberg"` both use the `source/resource`-style prefix directly as the table location. For Iceberg, Spine resolves the final table path under the destination-specific warehouse root (`s3://<bucket-name>` for S3, `storage_root` for local), removes that warehouse root, and converts the remaining path into the catalog table name by replacing `/` with `.` and prefixing it with `iceberg.`.
 
 Filesystem helpers for loaders live under **`src/loader/`** (for example `object_store.py`, `local_storage.py`).

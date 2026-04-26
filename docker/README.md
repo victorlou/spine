@@ -183,3 +183,4 @@ docker build --platform linux/amd64 ...
 - The container uses Python 3.12 and OpenJDK 21 for Spark
 - Redis runs in-memory inside the container
 - Mount `.env` as read-only (`:ro`) for security
+- Spark startup resolves several JARs at launch (Delta, Iceberg, Hadoop AWS, ngdbc); first-run dependency resolution adds time

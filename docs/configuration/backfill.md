@@ -15,7 +15,7 @@ Date-range backfill splits historical data fetching into multiple API requests w
 
 Backfill can run in two ways:
 
-1. **Auto-backfill**: When a dependent resource's destination (e.g. S3) is empty, the pipeline automatically uses backfill date ranges instead of the default date range for the upstream snapshot resource.
+1. **Auto-backfill**: When a dependent resource's object-store destination is empty, the pipeline automatically uses backfill date ranges instead of the default date range for the upstream snapshot resource.
 
 2. **Manual backfill**: Run with `--backfill` or `-b` to force backfill date ranges regardless of destination state.
 

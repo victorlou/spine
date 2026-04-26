@@ -78,7 +78,7 @@ class AWSSettings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore")
 
-    REGION: str = Field(default="ap-southeast-2", description="AWS region")
+    REGION: str = Field(default="us-east-1", description="AWS region")
 
     def __init__(self, **kwargs):
         """Initialize AWS settings using the credential manager."""
@@ -89,8 +89,10 @@ class AWSSettings(BaseSettings):
             # Region from credential manager takes precedence
             self.REGION = cred_manager.region
         except AWSError as e:
-            logger.error("Failed to initialize AWS settings", extra_fields={"error": str(e)})
-            raise
+            logger.warning(
+                "Failed to initialize AWS settings; using default region",
+                extra_fields={"error": str(e), "region": self.REGION},
+            )
 
 
 class DatabricksSettings(BaseSettings):

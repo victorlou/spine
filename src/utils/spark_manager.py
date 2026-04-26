@@ -27,7 +27,6 @@ class SparkManager:
         if cls._instance is None:
             cls._instance = super(SparkManager, cls).__new__(cls)
             cls._instance._logger = get_logger(cls.__name__)
-            cls._instance._load_credentials()
         return cls._instance
 
     def _load_credentials(self) -> None:
@@ -77,6 +76,20 @@ class SparkManager:
         if self._spark is None:
             try:
                 self._logger.debug("Initializing new Spark session")
+
+                # Load AWS credentials lazily so non-S3 workloads do not fail at startup.
+                try:
+                    self._load_credentials()
+                except SparkError as e:
+                    self._logger.warning(
+                        "AWS credential initialization skipped; continuing with default Spark S3 credential chain",
+                        extra_fields={"error": str(e)},
+                    )
+                    self.aws_access_key = ""
+                    self.aws_secret_key = ""
+                    self.aws_session_token = None
+                    self.aws_region = "us-east-1"
+                    self.use_explicit_credentials = False
 
                 # Set Java options for local development
                 ConfigSpark.get_java_options()

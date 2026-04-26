@@ -64,7 +64,7 @@ loading:
 
 **`storage_root`** may be **absolute** or **relative**. Relative values are resolved when the operator config is loaded: they are joined to the **repository root** (the directory that contains `src/`), not to `CONFIG_PATH` or the process current working directory. For a normal checkout `.../myapp/config/`, output goes under `.../myapp/` (for example `.../myapp/.spine/local-output`), not under `config/`. If `CONFIG_PATH` points at YAML outside that tree (for example an absolute mount), relative `storage_root` still resolves under the Spine install root—use an absolute `storage_root` when output should live with that mount.
 
-The same `prefix`, `format`, `write_mode`, and `merge_keys` rules apply as for S3.
+The same `prefix`, `format`, `write_mode`, and `merge_keys` rules apply across all object-store destinations.
 
 **Recommended for dev/CI:** use a path under the repo that is gitignored, for example:
 

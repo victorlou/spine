@@ -142,7 +142,7 @@ docker run --rm \
   -e AWS_ACCESS_KEY_ID=... \
   -e AWS_SECRET_ACCESS_KEY=... \
   -e AWS_SESSION_TOKEN=... \
-  -e AWS_REGION=ap-southeast-2 \
+  -e AWS_REGION=us-east-1 \
   ghcr.io/victorlou/spine:vX.Y.Z \
   --select your_source
 ```

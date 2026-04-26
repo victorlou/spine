@@ -131,10 +131,10 @@ class AWSCredentialManager:
             "aws_access_key": self.aws_access_key if self.use_explicit_credentials else None,
             "aws_secret_key": self.aws_secret_key if self.use_explicit_credentials else None,
             "aws_session_token": self.aws_session_token if self.use_explicit_credentials else None,
-            "aws_region": self.session.region_name or "ap-southeast-2",
+            "aws_region": self.session.region_name or "us-east-1",
         }
 
     @property
     def region(self) -> str:
         """Get the configured AWS region."""
-        return self.session.region_name or "ap-southeast-2"
+        return self.session.region_name or "us-east-1"

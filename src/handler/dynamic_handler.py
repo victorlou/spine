@@ -143,7 +143,7 @@ class DynamicHandler(BaseHandler):
             loading = self.config.defaults.loading
         if not loading.enabled:
             return None
-        if loading.destination in ("s3", "local"):
+        if loading.destination in ("s3", "local", "gcs", "azure_blob"):
             prefix = (loading.prefix or "").strip()
             if not prefix:
                 return loading.model_copy(update={"prefix": f"{source_name}/{resource_name}"})
@@ -2604,31 +2604,17 @@ class DynamicHandler(BaseHandler):
                     )
                     if eff_loading:
                         if eff_loading.destination == "s3":
-                            if not eff_loading.s3_bucket:
-                                raise HandlerError(
-                                    f"Missing S3 bucket configuration for resource: {resource_name}"
-                                )
                             s3_buckets.add(eff_loading.s3_bucket)
-                        elif eff_loading.destination == "gcs":
-                            if not eff_loading.gcs_bucket:
-                                raise HandlerError(
-                                    f"Missing GCS bucket configuration for resource: {resource_name}"
-                                )
-                        elif eff_loading.destination == "azure_blob":
-                            if not eff_loading.azure_container:
-                                raise HandlerError(
-                                    f"Missing Azure container configuration for resource: {resource_name}"
-                                )
-                            if not eff_loading.azure_account:
-                                raise HandlerError(
-                                    f"Missing Azure account configuration for resource: {resource_name}"
-                                )
                         elif eff_loading.destination == "local":
-                            if not eff_loading.storage_root:
-                                raise HandlerError(
-                                    f"Missing storage_root for local loading on resource: {resource_name}"
-                                )
                             local_storage_roots.add(eff_loading.storage_root)
+                        elif eff_loading.destination in ("gcs", "azure_blob"):
+                            self.logger.info(
+                                "Cloud loading destination preflight completed without remote connectivity probe",
+                                extra_fields={
+                                    "resource_name": resource_name,
+                                    "destination": eff_loading.destination,
+                                },
+                            )
 
                 self.logger.info(f"Successfully validated source: {source_name}")
 

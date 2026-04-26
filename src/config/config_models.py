@@ -1121,31 +1121,6 @@ class ResourceConfig(BaseModel):
 
         super().__init__(**data)
 
-        # Validate loading destination fields (only if loading is configured and enabled)
-        if self.loading and self.loading.enabled:
-            dest = self.loading.destination
-            if dest == "s3" and not self.loading.s3_bucket:
-                raise ValueError(
-                    "s3_bucket (or bucket alias) is required for S3 destination "
-                    "(either in defaults or resource configuration)"
-                )
-            elif dest == "local" and not self.loading.storage_root:
-                raise ValueError(
-                    "storage_root is required for local destination (either in defaults or resource configuration)"
-                )
-            elif dest == "gcs" and not self.loading.gcs_bucket:
-                raise ValueError(
-                    "gcs_bucket (or bucket alias) is required for GCS destination "
-                    "(either in defaults or resource configuration)"
-                )
-            elif dest == "azure_blob" and (
-                not self.loading.azure_container or not self.loading.azure_account
-            ):
-                raise ValueError(
-                    "azure_container (or bucket alias) and azure_account are required for Azure destination "
-                    "(either in defaults or resource configuration)"
-                )
-
 
 class SourceType(StrEnum):
     """Built-in pipeline source kinds (YAML `type` field). Extend when adding new service types."""
@@ -1363,7 +1338,7 @@ class DefaultsConfig(BaseModel):
         description=(
             "Default loading merged into every resource unless the resource sets loading.enabled "
             "to false. Prefix may be omitted; the handler sets ``{source_name}/{resource_name}`` "
-            "before load when prefix is unset for local or S3 destinations."
+            "before load when prefix is unset for object-store destinations (local, s3, gcs, azure_blob)."
         ),
     )
     context: ContextConfig = Field(

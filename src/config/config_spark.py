@@ -42,7 +42,7 @@ class ConfigSpark:
     def get_local_configs(
         aws_access_key: str,
         aws_secret_key: str,
-        aws_region: str = "ap-southeast-2",
+        aws_region: str = "us-east-1",
         aws_session_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -99,7 +99,7 @@ class ConfigSpark:
         return config
 
     @staticmethod
-    def get_production_configs(region: str = "ap-southeast-2") -> Dict[str, Any]:
+    def get_production_configs(region: str = "us-east-1") -> Dict[str, Any]:
         """Configs for use inside AWS environment (ECS, EC2, etc)."""
         return {
             "spark.app.name": "DataIngestion",
@@ -125,7 +125,7 @@ class ConfigSpark:
         use_explicit_credentials: bool,
         aws_access_key: str = "",
         aws_secret_key: str = "",
-        aws_region: str = "ap-southeast-2",
+        aws_region: str = "us-east-1",
         aws_session_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """

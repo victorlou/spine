@@ -12,6 +12,7 @@ def test_defaults_config_loading_factory_is_local_delta() -> None:
     assert d.loading.storage_root == ".spine/local-output"
     assert d.loading.prefix is None
     assert d.loading.bucket is None
+    assert d.loading.s3_bucket is None
     assert d.loading.enabled is True
 
 
@@ -19,13 +20,14 @@ def test_defaults_config_explicit_loading_overrides() -> None:
     d = DefaultsConfig(
         loading=LoadingConfig(
             destination="s3",
-            bucket="b",
+            s3_bucket="b",
             prefix="src/res",
             format="delta",
         )
     )
     assert d.loading.destination == "s3"
     assert d.loading.bucket == "b"
+    assert d.loading.s3_bucket == "b"
 
 
 def test_resource_config_inherits_defaults_loading_when_loading_omitted() -> None:

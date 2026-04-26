@@ -10,16 +10,16 @@ from src.utils.exceptions import LoaderError
 
 
 def test_loading_base_uri_s3() -> None:
-    assert loading_base_uri(destination="s3", bucket="my-bucket") == "s3a://my-bucket"
+    assert loading_base_uri(destination="s3", s3_bucket="my-bucket") == "s3a://my-bucket"
 
 
 def test_loading_base_uri_s3_strips_whitespace() -> None:
-    assert loading_base_uri(destination="s3", bucket="  my-bucket  ") == "s3a://my-bucket"
+    assert loading_base_uri(destination="s3", s3_bucket="  my-bucket  ") == "s3a://my-bucket"
 
 
 def test_loading_base_uri_s3_missing_bucket() -> None:
-    with pytest.raises(ValueError, match="bucket is required"):
-        loading_base_uri(destination="s3", bucket=None)
+    with pytest.raises(ValueError, match="s3_bucket is required"):
+        loading_base_uri(destination="s3", s3_bucket=None)
 
 
 def test_loading_base_uri_local(tmp_path: Path) -> None:
@@ -34,9 +34,49 @@ def test_loading_base_uri_local_missing_root() -> None:
         loading_base_uri(destination="local", storage_root=None)
 
 
+def test_loading_base_uri_gcs() -> None:
+    assert loading_base_uri(destination="gcs", gcs_bucket="my-gcs-bucket") == "gs://my-gcs-bucket"
+
+
+def test_loading_base_uri_gcs_missing_bucket() -> None:
+    with pytest.raises(ValueError, match="gcs_bucket is required"):
+        loading_base_uri(destination="gcs", gcs_bucket=None)
+
+
+def test_loading_base_uri_azure() -> None:
+    uri = loading_base_uri(
+        destination="azure", azure_container="mycontainer", azure_account="myaccount"
+    )
+    assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
+
+
+def test_loading_base_uri_blob_alias() -> None:
+    uri = loading_base_uri(
+        destination="blob", azure_container="mycontainer", azure_account="myaccount"
+    )
+    assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
+
+
+def test_loading_base_uri_azure_blob_alias() -> None:
+    uri = loading_base_uri(
+        destination="azure_blob", azure_container="mycontainer", azure_account="myaccount"
+    )
+    assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
+
+
+def test_loading_base_uri_azure_missing_container() -> None:
+    with pytest.raises(ValueError, match="azure_container is required"):
+        loading_base_uri(destination="azure", azure_container=None, azure_account="myaccount")
+
+
+def test_loading_base_uri_azure_missing_account() -> None:
+    with pytest.raises(ValueError, match="azure_account is required"):
+        loading_base_uri(destination="azure", azure_container="mycontainer", azure_account=None)
+
+
 def test_loading_base_uri_unknown_destination() -> None:
     with pytest.raises(ValueError, match="Unsupported"):
-        loading_base_uri(destination="azure", bucket="x")
+        loading_base_uri(destination="sftp", s3_bucket="x")
 
 
 @pytest.fixture

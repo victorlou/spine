@@ -26,10 +26,32 @@ defaults:
   #   format: "delta"
   #   write_mode: "overwrite"
   #   compression: "snappy"
-  #   bucket: "${S3_INGESTION_BUCKET}"
+  #   s3_bucket: "${S3_INGESTION_BUCKET}"  # canonical
+  #   # bucket: "${S3_INGESTION_BUCKET}"   # alias
   #   prefix: "my_source/my_resource"
   #
-  # If a resource sets only bucket/prefix, set destination: "s3" on that resource (or here
+  # For GCS instead:
+  # loading:
+  #   destination: "gcs"
+  #   format: "delta"
+  #   write_mode: "overwrite"
+  #   compression: "snappy"
+  #   gcs_bucket: "${GCS_INGESTION_BUCKET}"  # canonical
+  #   # bucket: "${GCS_INGESTION_BUCKET}"    # alias
+  #   prefix: "my_source/my_resource"
+  #
+  # For Azure Blob Storage (ABFS) instead:
+  # loading:
+  #   destination: "blob"  # preferred (aliases: azure, azure_blob)
+  #   format: "delta"
+  #   write_mode: "overwrite"
+  #   compression: "snappy"
+  #   azure_container: "${AZURE_CONTAINER}"  # canonical
+  #   azure_account: "${AZURE_STORAGE_ACCOUNT}"
+  #   # bucket: "${AZURE_CONTAINER}"         # alias for azure_container
+  #   prefix: "my_source/my_resource"
+  #
+  # If a resource sets only cloud bucket/container + prefix, set destination on that resource (or here
   # in defaults) so it does not inherit destination: local from defaults.
 
   context:

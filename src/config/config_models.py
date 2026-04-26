@@ -50,11 +50,18 @@ class LoadingFormat(str, Enum):
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
-    For S3 and local destinations, prefix should follow ``source_name/resource_name``
+    For object storage destinations, prefix should follow ``source_name/resource_name``
     (e.g. ``my_source/users``). When prefix is omitted, the handler fills it from the
     source and resource name at runtime.
 
-    For S3, the actual Parquet data will be stored in a 'data' subdirectory under this prefix.
+    For file-based formats (Parquet), the actual data will be stored in a 'data'
+    subdirectory under this prefix.
+
+    Supported destinations and required fields:
+    - ``s3``    → requires ``s3_bucket`` (or alias ``bucket``)
+    - ``local`` → requires ``storage_root``
+    - ``gcs``   → requires ``gcs_bucket`` (or alias ``bucket``)
+    - ``azure_blob`` (aliases: ``blob``, ``azure``) → requires ``azure_container`` (or alias ``bucket``) and ``azure_account``
 
     Save modes for Delta format:
     - **overwrite** (default): Replace all existing data in the table
@@ -77,8 +84,7 @@ class LoadingConfig(BaseModel):
     format: LoadingFormat = LoadingFormat.DELTA
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
     compression: Optional[str] = "snappy"
-    bucket: Optional[str] = None  # For S3, can be inherited from defaults
-    prefix: Optional[str] = None  # For S3/local, required for those destinations
+    prefix: Optional[str] = None  # For all object store destinations; required at runtime
     storage_root: Optional[str] = Field(
         default=None,
         description=(
@@ -86,6 +92,23 @@ class LoadingConfig(BaseModel):
             "May be relative to the repository root (directory containing ``src/``); "
             "ConfigLoader resolves it before validation."
         ),
+    )
+    bucket: Optional[str] = None  # Generic alias bucket/container name
+    s3_bucket: Optional[str] = Field(
+        default=None,
+        description="Canonical S3 bucket name for destination: s3 (Spark s3a://).",
+    )
+    gcs_bucket: Optional[str] = Field(
+        default=None,
+        description="GCS bucket name for destination: gcs (Spark gs://).",
+    )
+    azure_container: Optional[str] = Field(
+        default=None,
+        description="Azure Blob Storage container name for destination: azure_blob (Spark abfs://).",
+    )
+    azure_account: Optional[str] = Field(
+        default=None,
+        description="Azure storage account name for destination: azure_blob (Spark abfs://).",
     )
     merge_keys: Optional[List[str]] = Field(
         default=None,
@@ -96,14 +119,56 @@ class LoadingConfig(BaseModel):
         description="Enable deduplication during merge operations using merge_keys as the matching criteria. When True, duplicate records matching the merge key are deduplicated with non-deterministic row selection. When False, all records are preserved without deduplication.",
     )
 
+    @model_validator(mode="after")
+    def normalize_destination_alias_fields(self) -> "LoadingConfig":
+        """Normalize generic/provider aliases and reject conflicting values."""
+        if not self.enabled:
+            return self
+
+        if self.destination == "s3":
+            if self.bucket and self.s3_bucket and self.bucket != self.s3_bucket:
+                raise ValueError("bucket and s3_bucket cannot both be set with different values")
+            effective = self.s3_bucket or self.bucket
+            object.__setattr__(self, "s3_bucket", effective)
+            object.__setattr__(self, "bucket", effective)
+
+        elif self.destination == "gcs":
+            if self.bucket and self.gcs_bucket and self.bucket != self.gcs_bucket:
+                raise ValueError("bucket and gcs_bucket cannot both be set with different values")
+            effective = self.gcs_bucket or self.bucket
+            object.__setattr__(self, "gcs_bucket", effective)
+            object.__setattr__(self, "bucket", effective)
+
+        elif self.destination == "azure_blob":
+            if self.bucket and self.azure_container and self.bucket != self.azure_container:
+                raise ValueError(
+                    "bucket and azure_container cannot both be set with different values"
+                )
+            effective = self.azure_container or self.bucket
+            object.__setattr__(self, "azure_container", effective)
+            object.__setattr__(self, "bucket", effective)
+
+        return self
+
+    @field_validator("destination")
+    @classmethod
+    def normalize_destination_aliases(cls, v: str) -> str:
+        """Normalize destination aliases to canonical destination identifiers."""
+        normalized = str(v).strip().lower()
+        destination_aliases = {
+            "azure": "azure_blob",
+            "blob": "azure_blob",
+        }
+        return destination_aliases.get(normalized, normalized)
+
     @field_validator("prefix")
     @classmethod
     def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate prefix format for S3 and local filesystem destinations."""
+        """Validate prefix format for object storage destinations."""
         if not info.data.get("enabled", True):
             return v
         dest = info.data.get("destination")
-        if dest in ("s3", "local"):
+        if dest in ("s3", "local", "gcs", "azure_blob"):
             if v is None or not str(v).strip():
                 return None
 
@@ -152,15 +217,25 @@ class LoadingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_destination_storage_fields(self) -> "LoadingConfig":
-        """Require bucket (S3) or storage_root (local); runs after merge_keys check."""
+        """Require the appropriate storage fields for each object store destination."""
         if not self.enabled:
             return self
         if self.destination == "s3":
-            if not self.bucket:
-                raise ValueError("bucket is required for S3 destination")
+            if not self.s3_bucket:
+                raise ValueError("s3_bucket (or bucket alias) is required for S3 destination")
         elif self.destination == "local":
             if not self.storage_root:
                 raise ValueError("storage_root is required for local destination")
+        elif self.destination == "gcs":
+            if not self.gcs_bucket:
+                raise ValueError("gcs_bucket (or bucket alias) is required for GCS destination")
+        elif self.destination == "azure_blob":
+            if not self.azure_container:
+                raise ValueError(
+                    "azure_container (or bucket alias) is required for Azure destination"
+                )
+            if not self.azure_account:
+                raise ValueError("azure_account is required for Azure destination")
         return self
 
     model_config = {"validate_assignment": True}
@@ -1047,24 +1122,29 @@ class ResourceConfig(BaseModel):
         super().__init__(**data)
 
         # Validate loading destination fields (only if loading is configured and enabled)
-        if (
-            self.loading
-            and self.loading.enabled
-            and self.loading.destination == "s3"
-            and not self.loading.bucket
-        ):
-            raise ValueError(
-                "bucket is required for S3 destination (either in defaults or resource configuration)"
-            )
-        if (
-            self.loading
-            and self.loading.enabled
-            and self.loading.destination == "local"
-            and not self.loading.storage_root
-        ):
-            raise ValueError(
-                "storage_root is required for local destination (either in defaults or resource configuration)"
-            )
+        if self.loading and self.loading.enabled:
+            dest = self.loading.destination
+            if dest == "s3" and not self.loading.s3_bucket:
+                raise ValueError(
+                    "s3_bucket (or bucket alias) is required for S3 destination "
+                    "(either in defaults or resource configuration)"
+                )
+            elif dest == "local" and not self.loading.storage_root:
+                raise ValueError(
+                    "storage_root is required for local destination (either in defaults or resource configuration)"
+                )
+            elif dest == "gcs" and not self.loading.gcs_bucket:
+                raise ValueError(
+                    "gcs_bucket (or bucket alias) is required for GCS destination "
+                    "(either in defaults or resource configuration)"
+                )
+            elif dest == "azure_blob" and (
+                not self.loading.azure_container or not self.loading.azure_account
+            ):
+                raise ValueError(
+                    "azure_container (or bucket alias) and azure_account are required for Azure destination "
+                    "(either in defaults or resource configuration)"
+                )
 
 
 class SourceType(StrEnum):

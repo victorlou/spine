@@ -34,7 +34,6 @@ def test_get_backfill_config_query_style_flat_dict() -> None:
     assert cfg.driver_key == "start_date"
     assert cfg.reference_key == "end_date"
     assert cfg.reference_config.field == "start_date"
-    assert cfg.field_keys == ["start_date", "end_date"]
 
 
 def test_get_backfill_config_body_style_flat_dict() -> None:

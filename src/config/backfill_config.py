@@ -11,7 +11,7 @@ during plan build).
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from dateutil.relativedelta import relativedelta
 
@@ -48,7 +48,6 @@ class BackfillConfig:
     reference_key: str  # request input name tied to driver (e.g. endDate)
     driver_config: BackfillStaticDateConfig
     reference_config: BackfillReferenceConfig
-    field_keys: List[str]  # [driver_key, reference_key]; injected into request context
 
 
 def parse_increment(increment_str: str) -> relativedelta:
@@ -185,5 +184,4 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
         reference_key=reference_key,
         driver_config=driver_config,
         reference_config=reference_config,
-        field_keys=[driver_key, reference_key],
     )

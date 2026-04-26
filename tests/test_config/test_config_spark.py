@@ -3,12 +3,7 @@
 import os
 
 from src.config.config_models import ConnectorProvisionMode, SparkRuntimeConfig
-from src.config.config_spark import (
-    _GCS_CONNECTOR_PKG,
-    _HADOOP_AWS_PKG,
-    ConfigSpark,
-    SparkSessionConf,
-)
+from src.config.config_spark import _GCS_CONNECTOR_PKG, _HADOOP_AWS_PKG, SparkSessionConf
 from src.config.spark_runtime import resolve_spark_runtime
 
 
@@ -74,7 +69,3 @@ def test_runtime_readiness_notes_include_s3_when_present() -> None:
     )
     assert any("S3 destination" in n for n in notes)
     assert any("Local destination" in n for n in notes)
-
-
-def test_config_spark_alias_points_at_spark_session_conf() -> None:
-    assert ConfigSpark is SparkSessionConf

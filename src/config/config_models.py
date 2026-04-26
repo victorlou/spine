@@ -453,7 +453,7 @@ class InputConfig(BaseModel):
         input_format: How the parameter value should be interpreted
             - "single": Treat value as a single item
             - "array": Treat value as a list of items
-        request_format: How to format the value(s) in the API request (can be string or RequestFormatConfig)
+        request_format: How to format the value(s) in the API request (``RequestFormatConfig``; shorthand strings are normalized at validation)
         batch_size: Optional batch size for processing. Static lists are automatically batched.
         pagination: Optional pagination configuration (typically used for page parameters)
 
@@ -471,8 +471,9 @@ class InputConfig(BaseModel):
 
     value: DynamicOrStaticValue  # Static or dynamic value
     input_format: Literal["single", "array"] = "single"  # Format of the input parameter
-    request_format: Union[RequestFormatType, RequestFormatConfig, None] = (
-        None  # for backwards compatibility
+    request_format: Optional[RequestFormatConfig] = Field(
+        default=None,
+        description="Request formatting; use ``{type: string}`` or shorthand ``string`` at YAML load time.",
     )
     batch_size: Optional[Union[int, BatchSizeMode]] = (
         None  # Batch size for processing. Use BatchSizeMode.ALL to process all items in a single batch.
@@ -485,6 +486,30 @@ class InputConfig(BaseModel):
         default=None,
         description="Pagination configuration for this parameter (typically used for page parameters)",
     )
+
+    @field_validator("request_format", mode="before")
+    @classmethod
+    def normalize_request_format(cls, v: Any) -> Optional[RequestFormatConfig]:
+        """Accept ``RequestFormatConfig``, a format name string, or a dict from YAML."""
+        if v is None:
+            return None
+        if isinstance(v, RequestFormatConfig):
+            return v
+        if isinstance(v, RequestFormatType):
+            return RequestFormatConfig(type=v)
+        if isinstance(v, str):
+            try:
+                return RequestFormatConfig(type=RequestFormatType(v))
+            except ValueError as e:
+                allowed = ", ".join(repr(t.value) for t in RequestFormatType)
+                raise ValueError(
+                    f"request_format string must be one of [{allowed}], got {v!r}"
+                ) from e
+        if isinstance(v, dict):
+            return RequestFormatConfig.model_validate(v)
+        raise TypeError(
+            f"request_format must be null, str, dict, or RequestFormatConfig, got {type(v).__name__}"
+        )
 
     @model_validator(mode="after")
     def extract_pagination_from_value(self):
@@ -519,7 +544,6 @@ class InputConfig(BaseModel):
         # If preprocessing is configured, the perceived value will be a list (regardless of the input type of the value) and after applying preprocessing steps
         if (
             self.request_format
-            and isinstance(self.request_format, RequestFormatConfig)
             and self.request_format.preprocess
             and isinstance(value, (str, int, float, list))
         ):
@@ -537,15 +561,7 @@ class InputConfig(BaseModel):
 
             value = processed_value
 
-        # Now apply request_format conversion
-        # Handle how the value could be a list or a single value
-        # Normalize request_format to RequestFormatConfig
         format_config = self.request_format
-        if isinstance(format_config, str):
-            # Backwards compatibility: convert string to RequestFormatConfig
-            # Cast to the appropriate literal type
-            format_config = RequestFormatConfig(type=format_config)  # type: ignore[arg-type]
-
         if not format_config:
             return value
 

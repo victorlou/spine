@@ -649,9 +649,8 @@ def resolve_request_body(
     return request_body
 
 
-# Maintain backward compatibility
-# Dict[str, Any] allows nested dictionaries with flexible field types (including dynamic values)
-# union_mode="left_to_right" ensures that Pydantic tries to match types in the order they are defined unlike the default behavior 'smart' which may lead to unexpected type resolution
+# Dict and list members support nested parameter templates. ``union_mode="left_to_right"`` fixes
+# Pydantic's member resolution order so plain strings are not greedily parsed as other shapes.
 DynamicOrStaticValue = Annotated[
     Union[str, int, float, bool, DynamicValue, ComplexDynamicValue, Dict[str, Any], List[Any]],
     Field(union_mode="left_to_right"),

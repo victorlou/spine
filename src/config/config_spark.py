@@ -285,7 +285,3 @@ class SparkSessionConf:
             config.update(_s3a_endpoint_and_filesystem(s3_region))
         config.update(_hadoop_filesystem_impl_layer(destinations))
         return config
-
-
-# Backward-compatible alias (prefer SparkSessionConf in new code).
-ConfigSpark = SparkSessionConf

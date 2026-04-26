@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from src.config.spark_runtime import resolve_spark_runtime
 from src.loader.base_loader import BaseLoader
 from src.loader.local_storage import check_local_storage_root
 from src.utils.exceptions import HandlerError, SparkError
@@ -75,7 +76,16 @@ class BaseHandler(ABC):
         """
         try:
             self.spark_manager = SparkManager()
-            self.spark = self.spark_manager.init_session()
+            destinations = {"local"}
+            resolved = None
+            if getattr(self, "settings", None) is not None:
+                destinations = self.settings.loading_destinations or {"local"}
+                resolved = resolve_spark_runtime(
+                    self.settings.pipeline_config.defaults.spark_runtime
+                )
+            self.spark = self.spark_manager.init_session(
+                destinations=destinations, spark_runtime=resolved
+            )
         except SparkError as e:
             raise HandlerError.from_error(e, "Failed to initialize Spark") from e
 

@@ -77,6 +77,16 @@ defaults:
       path: "../.tmp/disk_streaming"
       file_size_threshold: 10000000
 
+  # Spark host profile and symmetric Hadoop cloud connector provisioning (optional; sensible defaults apply).
+  # ``profile: auto`` inspects the environment (Databricks, EMR, ECS ...) and picks local vs managed assumptions.
+  # ``s3_connector_mode`` / ``gcs_connector_mode`` / ``azure_connector_mode``: auto | packages | external
+  #   (``auto`` uses ``external`` on Databricks/EMR only; S3A endpoint region follows AWS env/credentials, not YAML).
+  # spark_runtime:
+  #   profile: "auto"
+  #   s3_connector_mode: "auto"
+  #   gcs_connector_mode: "auto"
+  #   azure_connector_mode: "auto"
+
 # Named SQL files live under config/queries/ (operator-local, not committed).
 # See config/examples/sample_query.sql for a minimal template.
 queries: []

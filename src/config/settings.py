@@ -190,6 +190,13 @@ class Settings(BaseSettings):
         """
         return self._pipeline_config
 
+    @property
+    def loading_destinations(self) -> Set[str]:
+        """Effective loading destinations used by the loaded/selected pipeline config."""
+        if not self._pipeline_config:
+            return set()
+        return self._pipeline_config.get_effective_loading_destinations()
+
     def _load_config(self, selection: Optional[Dict[str, Optional[Set[str]]]] = None) -> None:
         """
         Load and validate the pipeline configuration.

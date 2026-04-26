@@ -18,6 +18,7 @@
   - [Merge (preview)](#merge-preview)
   - [Current limitations](#current-limitations)
 - [Quick reference](#quick-reference)
+- [Spark Runtime Readiness](#spark-runtime-readiness)
 
 ## Destinations
 
@@ -215,3 +216,18 @@ Iceberg support is still in an early merge-support phase. Plan around the follow
 For table formats, `format: "delta"` and `format: "iceberg"` both use the `source/resource`-style prefix directly as the table location. For Iceberg, Spine resolves the final table path under the destination-specific warehouse root (`s3://<bucket-name>` for S3, `storage_root` for local), removes that warehouse root, and converts the remaining path into the catalog table name by replacing `/` with `.` and prefixing it with `iceberg.`.
 
 Filesystem helpers for loaders live under **`src/loader/`** (for example `object_store.py`, `local_storage.py`).
+
+## Spark Runtime Readiness
+
+Spine composes Spark connector packages and Hadoop filesystem settings from the effective destination set in your selected pipeline config and from **`defaults.spark_runtime`** (see [`config/defaults.example.yml`](../../config/defaults.example.yml)).
+
+| Destination | Required loading fields | Spark connector expectation | Auth expectation |
+|-------------|-------------------------|-----------------------------|------------------|
+| `local` | `storage_root`, `prefix` | none | local filesystem permissions |
+| `s3` | `s3_bucket` (or `bucket` alias), `prefix` | `fs.s3a.*` settings; `hadoop-aws` via Ivy when `defaults.spark_runtime.s3_connector_mode` resolves to `packages` | IAM role, profile, or environment credentials (or explicit keys in local dev paths); S3A region from AWS chain / env, not `spark_runtime` |
+| `gcs` | `gcs_bucket` (or `bucket` alias), `prefix` | GCS Hadoop connector + `fs.gs.*` implementation | runtime-provided Google auth (ADC/service account/workload identity) |
+| `azure_blob` (`blob`/`azure`) | `azure_container` (or `bucket` alias), `azure_account`, `prefix` | ABFS connector + `fs.abfs.*` implementation | runtime-provided Azure storage auth |
+
+**Configuration-first:** set `defaults.spark_runtime.profile` (`auto`, `local_dev`, or `cluster_managed`) and `s3_connector_mode` / `gcs_connector_mode` / `azure_connector_mode` (`auto`, `packages`, or `external`). With `auto`, Spine inspects the process environment: on Databricks and EMR, all three default to `external` (connectors expected on the cluster); elsewhere they default to `packages` (Ivy coordinates at Spark startup). S3A endpoint **region** is not part of `spark_runtime`; it follows the AWS credential chain and standard AWS environment variables.
+
+**Optional environment overrides** (same semantics as YAML when set): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_PACKAGE`, `SPARK_AZURE_CONNECTOR_MODE`. Use these when CI or a container image cannot carry pipeline YAML changes.

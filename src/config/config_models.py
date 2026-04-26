@@ -1311,6 +1311,62 @@ class StreamingConfig(BaseModel):
     )
 
 
+class SparkRuntimeProfile(StrEnum):
+    """
+    How Spine treats the Spark host for profile selection when ``profile`` is ``auto``.
+
+    ``local_dev`` forces local-style defaults; ``cluster_managed`` forces managed-cluster defaults.
+    """
+
+    AUTO = "auto"
+    LOCAL_DEV = "local_dev"
+    CLUSTER_MANAGED = "cluster_managed"
+
+
+class ConnectorProvisionMode(StrEnum):
+    """Whether Ivy ``--packages`` should pull Hadoop cloud connectors or the cluster supplies them."""
+
+    AUTO = "auto"
+    PACKAGES = "packages"
+    EXTERNAL = "external"
+
+
+class SparkRuntimeConfig(BaseModel):
+    """
+    Defaults for Spark session bootstrap: host profile and symmetric Hadoop connector provisioning.
+
+    Per-destination ``*_connector_mode`` controls whether Ivy pulls artifacts or the cluster
+    already provides them. Environment variables (for example ``SPARK_S3_CONNECTOR_MODE``) still
+    override YAML when set so CI and bespoke images can force behavior without editing pipeline files.
+
+    S3A endpoint region is not configured here; it follows the AWS credential chain, ``AWS_REGION`` /
+    ``AWS_DEFAULT_REGION``, and ``AWSSettings`` (see deployment docs), keeping object-store knobs parallel.
+    """
+
+    profile: SparkRuntimeProfile = Field(
+        default=SparkRuntimeProfile.AUTO,
+        description=(
+            "``auto`` inspects the process environment (Databricks, EMR, ECS, Kubernetes) and "
+            "chooses between local and managed assumptions; set explicitly when detection is wrong."
+        ),
+    )
+    s3_connector_mode: ConnectorProvisionMode = Field(
+        default=ConnectorProvisionMode.AUTO,
+        description=(
+            "S3A / ``hadoop-aws``: ``auto`` uses the same Databricks/EMR ``external`` default as GCS and Azure; "
+            "else ``packages``."
+        ),
+    )
+    gcs_connector_mode: ConnectorProvisionMode = Field(
+        default=ConnectorProvisionMode.AUTO,
+        description="GCS Hadoop connector: ``auto`` uses Databricks/EMR ``external`` defaults; else ``packages``.",
+    )
+    azure_connector_mode: ConnectorProvisionMode = Field(
+        default=ConnectorProvisionMode.AUTO,
+        description="ABFS connector: same semantics as ``gcs_connector_mode``.",
+    )
+
+
 class DefaultsConfig(BaseModel):
     """Default configuration values. See ``config/defaults.example.yml`` for a full operator template."""
 
@@ -1347,6 +1403,10 @@ class DefaultsConfig(BaseModel):
     streaming: StreamingConfig = Field(
         default_factory=StreamingConfig,
         description="Streaming configuration for memory-efficient processing",
+    )
+    spark_runtime: SparkRuntimeConfig = Field(
+        default_factory=SparkRuntimeConfig,
+        description="Spark host profile and per-cloud connector provisioning (see docs/configuration/loading.md).",
     )
 
 
@@ -1417,6 +1477,24 @@ class PipelineConfig(BaseModel):
 
         with open(query_file_path, "r") as file:
             return file.read()
+
+    def get_effective_loading_destinations(self) -> set[str]:
+        """
+        Return the set of enabled loading destinations used by enabled resources.
+
+        Resource loading is already merged with defaults in model initialization, so this
+        method reflects effective destination usage for the current selection scope.
+        """
+        destinations: set[str] = set()
+        for source in self.sources.values():
+            if not source.enabled:
+                continue
+            for resource in source.resources.values():
+                if not resource.enabled or resource.loading is None:
+                    continue
+                if resource.loading.enabled:
+                    destinations.add(resource.loading.destination)
+        return destinations
 
 
 class FieldConfig:

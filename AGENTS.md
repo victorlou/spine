@@ -36,7 +36,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 ## Extending Spine
 
 - New auth behavior: extend the service/auth configuration model and validation together.
-- New destination: add a loader under `src/loader/`, register it in `src/loader/loader_factory.py`, and document any new config.
+- New destination: add a loader under `src/loader/`, register it in `src/loader/loader_factory.py`, and document any new config. If Spark needs filesystem or connector wiring, extend `src/config/config_spark.py` (`SparkSessionConf`), `src/config/spark_runtime.py`, and `defaults.spark_runtime` in the same change set so behavior stays configuration-first.
 - New source/service type: implement it under `src/service/`, wire it through the factory/config models, and avoid bypassing planner/handler flow. For a new **relational database** kind that shares the same table/query extract and request-context rules, add its `SourceType` to `is_database_source_type()` in `src/config/config_models.py` (that function is the only database-kind predicate; call it from planner, handler, and validators rather than re-listing types).
 - New transformation or collection behavior should fit the existing parser/collector split rather than being embedded ad hoc in services.
 

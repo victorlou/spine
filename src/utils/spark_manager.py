@@ -1,13 +1,18 @@
 """
 Spark session management utility.
+
+Uses :class:`src.config.config_spark.SparkSessionConf` for builder settings and
+:class:`src.config.spark_runtime.resolve_spark_runtime` when callers do not inject a resolved runtime.
 """
 
 import atexit
-from typing import Optional
+from typing import Optional, Set
 
 from pyspark.sql import SparkSession
 
-from src.config.config_spark import ConfigSpark
+from src.config.config_spark import SparkSessionConf
+from src.config.settings import get_settings
+from src.config.spark_runtime import ResolvedSparkRuntime, resolve_spark_runtime
 from src.utils.aws_credentials import AWSCredentialManager
 from src.utils.exceptions import AWSError, SparkError
 from src.utils.logger import get_logger
@@ -17,6 +22,9 @@ class SparkManager:
     """
     Singleton manager for Spark session.
     Ensures only one Spark session is created and properly managed.
+
+    Multi-pipeline or multi-tenant use in one process is not supported without resetting
+    ``_instance`` and ``_spark`` (see tests).
     """
 
     _instance = None
@@ -37,7 +45,6 @@ class SparkManager:
             SparkError: If credentials cannot be loaded
         """
         try:
-            # Use the singleton credential manager
             cred_manager = AWSCredentialManager()
             credentials = cred_manager.get_credentials()
 
@@ -62,10 +69,23 @@ class SparkManager:
                 message=error_msg, operation="_load_credentials", original_error=e
             ) from e
 
-    def init_session(self) -> SparkSession:
+    def _resolve_spark_runtime(
+        self, spark_runtime: Optional[ResolvedSparkRuntime]
+    ) -> ResolvedSparkRuntime:
+        if spark_runtime is not None:
+            return spark_runtime
+        return resolve_spark_runtime(get_settings().pipeline_config.defaults.spark_runtime)
+
+    def init_session(
+        self,
+        destinations: Optional[Set[str]] = None,
+        spark_runtime: Optional[ResolvedSparkRuntime] = None,
+    ) -> SparkSession:
         """
-        Initialize or get existing Spark session.
-        Uses AWS credentials loaded during initialization.
+        Initialize or get an existing Spark session.
+
+        Loads AWS credentials only when ``s3`` is in the destination set (for explicit-key paths or
+        region hints); otherwise skips credential initialization.
 
         Returns:
             SparkSession: The initialized or existing Spark session
@@ -76,41 +96,56 @@ class SparkManager:
         if self._spark is None:
             try:
                 self._logger.debug("Initializing new Spark session")
+                destinations = destinations or {"local"}
+                resolved = self._resolve_spark_runtime(spark_runtime)
+                self._logger.debug(resolved.summary_for_log())
 
-                # Load AWS credentials lazily so non-S3 workloads do not fail at startup.
-                try:
-                    self._load_credentials()
-                except SparkError as e:
-                    self._logger.warning(
-                        "AWS credential initialization skipped; continuing with default Spark S3 credential chain",
-                        extra_fields={"error": str(e)},
+                self.aws_access_key = ""
+                self.aws_secret_key = ""
+                self.aws_session_token = None
+                self.aws_region = ""
+                self.use_explicit_credentials = False
+                if "s3" in destinations:
+                    try:
+                        self._load_credentials()
+                    except SparkError as e:
+                        self._logger.warning(
+                            "AWS credential initialization skipped; continuing with default Spark S3 credential chain",
+                            extra_fields={"error": str(e)},
+                        )
+
+                SparkSessionConf.get_java_options(destinations, resolved)
+
+                readiness_errors = SparkSessionConf.get_runtime_readiness_errors(
+                    destinations, resolved
+                )
+                if readiness_errors:
+                    raise SparkError(
+                        message="; ".join(readiness_errors),
+                        operation="init_session",
                     )
-                    self.aws_access_key = ""
-                    self.aws_secret_key = ""
-                    self.aws_session_token = None
-                    self.aws_region = "us-east-1"
-                    self.use_explicit_credentials = False
 
-                # Set Java options for local development
-                ConfigSpark.get_java_options()
+                for note in SparkSessionConf.get_runtime_readiness_notes(
+                    destinations, resolved, use_explicit_credentials=self.use_explicit_credentials
+                ):
+                    self._logger.info(note)
 
-                # Get Spark configurations
-                configs = ConfigSpark.get_configs(
+                configs = SparkSessionConf.get_configs_for_destinations(
+                    destinations=destinations,
                     use_explicit_credentials=self.use_explicit_credentials,
                     aws_access_key=self.aws_access_key,
                     aws_secret_key=self.aws_secret_key,
                     aws_region=self.aws_region,
                     aws_session_token=self.aws_session_token,
+                    resolved=resolved,
                 )
 
-                # Build session with configurations
                 builder = SparkSession.builder
                 for key, value in configs.items():
                     builder = builder.config(key, value)
 
                 self._spark = builder.getOrCreate()
 
-                # Register cleanup
                 atexit.register(self.stop_session)
 
                 self._logger.debug("Spark session initialized successfully")

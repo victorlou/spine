@@ -49,7 +49,9 @@ A separate weekly cleanup workflow keeps the registry tidy while preserving mult
 
 - Set environment variables via your orchestrator (for example Kubernetes secrets, AWS Secrets Manager/SSM, or plain `.env` in development).
 - If you run without the default repo layout (for example a minimal image without operator config baked in), set `CONFIG_PATH` to an **absolute** path to a directory that contains `defaults.yml`, `sources/`, and optionally `queries/` (see [Configuration overview](configuration/overview.md)).
-- Configure cloud access for your selected loading destination (`s3`, `gcs`, `azure_blob`) using your platform's standard identity/credential model and Hadoop connector settings.
+- Configure loading destinations and credentials in pipeline YAML (`defaults.loading` and per-resource overrides); see [Loading configuration](configuration/loading.md). Cloud auth follows your platform (IAM, workload identity, Azure managed identity, and so on).
+- Prefer **`defaults.spark_runtime`** in `defaults.yml` for Spark host profile and symmetric S3/GCS/Azure connector provisioning (`packages` vs `external`). Spine detects common managed environments (Databricks, EMR, ECS, Kubernetes) when `profile` is `auto`.
+- Optional environment overrides (for CI or images that cannot edit YAML): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_PACKAGE`, `SPARK_AZURE_CONNECTOR_MODE`. When unset, YAML and auto-detection drive behavior.
 - For **ECS Fargate**, promoting config to **S3**, optional **`SPINE_CONFIG_S3_URI`** pull at container start (boto3), GHCR image pinning, and task-definition patterns (all placeholders), see the [ECS + S3 reference](deployment/ecs-s3-reference.md), including `python -m src.utils.s3_config_push` for one-off or CI uploads.
 
 ## Error Handling and Monitoring

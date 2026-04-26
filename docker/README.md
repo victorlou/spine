@@ -101,7 +101,19 @@ docker run --rm \
 ```
 
 
-### AWS credentials options
+### Spark runtime and object-store connectors
+
+Spine builds Spark Hadoop filesystem and Ivy package lists from your **selected pipeline config** (effective loading destinations) and from **`defaults.spark_runtime`** in `defaults.yml`: `profile` (`auto` / `local_dev` / `cluster_managed`) plus **`s3_connector_mode`**, **`gcs_connector_mode`**, and **`azure_connector_mode`** (`auto` / `packages` / `external`). Prefer editing YAML there; use environment variables only when the image or CI cannot carry config changes.
+
+| Concern | Primary (config) | Optional env override |
+|--------|-------------------|------------------------|
+| S3 / S3A (`hadoop-aws`, Ivy) | `defaults.spark_runtime.s3_connector_mode` | `SPARK_S3_CONNECTOR_MODE` |
+| GCS | `defaults.spark_runtime.gcs_connector_mode` | `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_PACKAGE` (when mode is `packages`) |
+| Azure Blob / ABFS | `defaults.spark_runtime.azure_connector_mode` | `SPARK_AZURE_CONNECTOR_MODE` |
+
+With `auto`, Databricks and EMR default to **`external`** for all three (cluster-provided jars); other environments default to **`packages`**. Use **`external`** when your Spark image or platform already ships connectors and `fs.*` auth wiring.
+
+### AWS credentials options (only needed for S3 destinations)
 
 Profile-based (`AWS_PROFILE` in `.env`):
 
@@ -183,4 +195,4 @@ docker build --platform linux/amd64 ...
 - The container uses Python 3.12 and OpenJDK 21 for Spark
 - Redis runs in-memory inside the container
 - Mount `.env` as read-only (`:ro`) for security
-- Spark startup resolves several JARs at launch (Delta, Iceberg, Hadoop AWS, ngdbc); first-run dependency resolution adds time
+- Spark startup resolves several JARs at launch (Delta, Iceberg, ngdbc, and destination-specific connectors); first-run dependency resolution adds time

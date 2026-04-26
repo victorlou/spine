@@ -115,7 +115,7 @@ loading:
 
 ## Iceberg
 
-When using Iceberg format, Spine writes through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3://<bucket-name>`, and for local writes it is rooted at the configured `storage_root`. Spine first resolves the final table path from that warehouse root plus the configured `prefix`, then removes the warehouse root from the resolved path and converts the remaining path into a catalog table identifier by replacing `/` with `.` and prefixing it with `iceberg.`. For example, if the warehouse root is `s3://my-bucket` and the resolved table path is `s3://my-bucket/source/resource`, Spine derives the catalog table identifier `iceberg.source.resource`.
+When using Iceberg format, Spine writes through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, and for local writes it is rooted at the configured `storage_root`. Spine first resolves the final table path from that warehouse root plus the configured `prefix`, then removes the warehouse root from the resolved path and converts the remaining path into a catalog table identifier by replacing `/` with `.` and prefixing it with `iceberg.`. For example, if the warehouse root is `s3a://my-bucket` and the resolved table path is `a://my-bucket/source/resource`, Spine derives the catalog table identifier `iceberg.source.resource`.
 
 **Available modes**: `overwrite`, `append`, `merge`
 

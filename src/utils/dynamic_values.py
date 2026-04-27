@@ -324,7 +324,7 @@ class DynamicValueResolver:
 
         self._logger.trace(
             "Computing RSA signature",
-            extra_fields={"input_data": input_data, "algorithm": algorithm},
+            extra_fields={"algorithm": algorithm},
         )
 
         try:

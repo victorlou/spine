@@ -129,10 +129,6 @@ class DiskStreamingDataCollector:
         """Create disk path if it doesn't exist."""
         try:
             os.makedirs(self.disk_path, exist_ok=True)
-            self.logger.debug(
-                "Initialized disk path for streaming collector",
-                extra_fields={"disk_path": self.disk_path},
-            )
         except Exception as e:
             self.logger.error(
                 "Failed to initialize disk path",

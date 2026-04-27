@@ -386,7 +386,7 @@ def _probe_object_store(
     hadoop_conf = spark.sparkContext._jsc.hadoopConfiguration()
     path = jvm.org.apache.hadoop.fs.Path(base_uri)
 
-    _logger.debug(
+    _logger.trace(
         "Destination preflight calling Hadoop FileSystem.get",
         extra_fields={
             **details,
@@ -413,7 +413,7 @@ def _probe_object_store(
             original_error=e,
         ) from e
     get_elapsed_ms = int((monotonic() - get_start) * 1000)
-    _logger.debug(
+    _logger.trace(
         "Destination preflight filesystem client initialised",
         extra_fields={**details, "step": "filesystem_get", "elapsed_ms": get_elapsed_ms},
     )

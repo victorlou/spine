@@ -12,12 +12,10 @@ from src.loader.object_store_loader import ObjectStoreLoader
 class LoaderFactory:
     """Factory for creating loader instances."""
 
-    # Map of loader types to their implementations
+    # Canonical LoadingConfig.destination values (aliases are normalized in LoadingConfig).
     _loader_types: ClassVar[Dict[str, Type[BaseLoader]]] = {
         "s3": ObjectStoreLoader,
         "gcs": ObjectStoreLoader,
-        "azure": ObjectStoreLoader,
-        "blob": ObjectStoreLoader,
         "azure_blob": ObjectStoreLoader,
         "local": ObjectStoreLoader,
     }

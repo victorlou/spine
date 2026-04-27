@@ -28,6 +28,7 @@ from src.config.config_models import (
     SourceConfig,
     is_database_source_type,
 )
+from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS
 from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
 from src.loader.destination_preflight import preflight_destinations
@@ -144,7 +145,7 @@ class DynamicHandler(BaseHandler):
             loading = self.config.defaults.loading
         if not loading.enabled:
             return None
-        if loading.destination in ("s3", "local", "gcs", "azure_blob"):
+        if loading.destination in OBJECT_STORE_DESTINATIONS:
             prefix = (loading.prefix or "").strip()
             if not prefix:
                 return loading.model_copy(update={"prefix": f"{source_name}/{resource_name}"})

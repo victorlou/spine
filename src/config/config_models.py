@@ -20,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS, normalize_loading_destination
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicOrStaticValue,
@@ -154,12 +155,7 @@ class LoadingConfig(BaseModel):
     @classmethod
     def normalize_destination_aliases(cls, v: str) -> str:
         """Normalize destination aliases to canonical destination identifiers."""
-        normalized = str(v).strip().lower()
-        destination_aliases = {
-            "azure": "azure_blob",
-            "blob": "azure_blob",
-        }
-        return destination_aliases.get(normalized, normalized)
+        return normalize_loading_destination(v)
 
     @field_validator("prefix")
     @classmethod
@@ -167,8 +163,9 @@ class LoadingConfig(BaseModel):
         """Validate prefix format for object storage destinations."""
         if not info.data.get("enabled", True):
             return v
+        # ``destination`` is validated before ``prefix``; aliases are already normalized.
         dest = info.data.get("destination")
-        if dest in ("s3", "local", "gcs", "azure_blob"):
+        if dest is not None and dest in OBJECT_STORE_DESTINATIONS:
             if v is None or not str(v).strip():
                 return None
 

@@ -43,6 +43,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from pyspark.sql import SparkSession
 
 from src.config.config_models import LoadingConfig
+from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS
 from src.config.spark_runtime import detect_managed_spark_platform
 from src.loader.local_storage import check_local_storage_root
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
@@ -505,7 +506,7 @@ def preflight_destinations(
     for config in configs:
         if config is None:
             continue
-        if config.destination not in ("s3", "gcs", "azure_blob", "local"):
+        if config.destination not in OBJECT_STORE_DESTINATIONS:
             continue
         key = _destination_dedup_key(config)
         if key in seen:

@@ -6,13 +6,14 @@ import time
 import uuid
 from datetime import UTC, datetime
 from functools import wraps
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from delta.tables import DeltaTable
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig, LoadingFormat
+from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS
 from src.loader.base_loader import BaseLoader, LoaderError
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.logger import get_logger
@@ -59,11 +60,6 @@ def retry_on_transient_storage_error(max_retries: int = 3, delay: float = 1.0):
 
 class ObjectStoreLoader(BaseLoader):
     """Loader for object storage destinations (S3, GCS, Azure Blob, local) using Spark and Hadoop FileSystem."""
-
-    # All destination strings that this loader handles. Kept in sync with loading_base_uri().
-    _SUPPORTED_DESTINATIONS: ClassVar[FrozenSet[str]] = frozenset(
-        {"s3", "gcs", "azure_blob", "blob", "azure", "local"}
-    )
 
     def __init__(self):
         super().__init__()
@@ -630,7 +626,7 @@ class ObjectStoreLoader(BaseLoader):
             Returns False if destination is not object-store backed, format is not a
             table format, or required path fields are missing.
         """
-        if config.destination not in self._SUPPORTED_DESTINATIONS or config.format not in [
+        if config.destination not in OBJECT_STORE_DESTINATIONS or config.format not in [
             LoadingFormat.DELTA,
             LoadingFormat.ICEBERG,
         ]:

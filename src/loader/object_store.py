@@ -5,6 +5,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 from pyspark.sql import SparkSession
 
+from src.config.loading_destinations import normalize_loading_destination
 from src.utils.exceptions import LoaderError
 
 
@@ -28,9 +29,7 @@ def loading_base_uri(
     - ``gcs``   → ``gs://{gcs_bucket}``
     - ``azure_blob`` / ``blob`` / ``azure`` → ``abfs://{azure_container}@{azure_account}.dfs.core.windows.net``
     """
-    normalized_destination = destination.strip().lower()
-    if normalized_destination in ("blob", "azure"):
-        normalized_destination = "azure_blob"
+    normalized_destination = normalize_loading_destination(destination)
 
     if normalized_destination == "s3":
         if not s3_bucket:

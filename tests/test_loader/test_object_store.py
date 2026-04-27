@@ -165,9 +165,9 @@ def test_loading_base_uri_azure_missing_account_model_construct() -> None:
 
 
 def test_loading_base_uri_unknown_destination() -> None:
-    cfg = LoadingConfig(
+    cfg = LoadingConfig.model_construct(
         destination="sftp",
-        format="delta",
+        format=LoadingFormat.DELTA,
         enabled=True,
     )
     with pytest.raises(ValueError, match="Unsupported"):

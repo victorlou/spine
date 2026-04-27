@@ -37,11 +37,17 @@ env/
 venv/
 ENV/
 
-# IDE
+# IDE / AI assistants
 .idea/
 .vscode/
 .cursor/
 .kiro/
+.claude/
+.windsurf/
+.github/copilot/
+.codeium/
+.continue/
+.aider*
 *.swp
 *.swo
 

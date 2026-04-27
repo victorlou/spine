@@ -61,45 +61,6 @@ _AZURE_ACCOUNT_RE = re.compile(r"^[a-z0-9]{3,24}$")
 _AZURE_CONTAINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 
 
-def _destination_dedup_key(config: LoadingConfig) -> Tuple[str, ...]:
-    """Stable identity for a destination so the same bucket/root is probed once."""
-    if config.destination == "s3":
-        return ("s3", config.s3_bucket or "")
-    if config.destination == "gcs":
-        return ("gcs", config.gcs_bucket or "")
-    if config.destination == "azure_blob":
-        return (
-            "azure_blob",
-            config.azure_container or "",
-            config.azure_account or "",
-        )
-    if config.destination == "local":
-        # Resolve to absolute so two different relative spellings of the same root
-        # are recognized as one destination.
-        root = config.storage_root or ""
-        if not root:
-            return ("local", "")
-        return ("local", str(Path(root).expanduser().resolve()))
-    return (config.destination,)
-
-
-def _destination_details(config: LoadingConfig) -> Dict[str, Any]:
-    """Operator-readable destination context attached to errors and logs."""
-    if config.destination == "s3":
-        return {"destination": "s3", "s3_bucket": config.s3_bucket}
-    if config.destination == "gcs":
-        return {"destination": "gcs", "gcs_bucket": config.gcs_bucket}
-    if config.destination == "azure_blob":
-        return {
-            "destination": "azure_blob",
-            "azure_container": config.azure_container,
-            "azure_account": config.azure_account,
-        }
-    if config.destination == "local":
-        return {"destination": "local", "storage_root": config.storage_root}
-    return {"destination": config.destination}
-
-
 def _s3_bucket_name_issue(name: str) -> Optional[str]:
     """Return a human-readable issue or ``None`` if the name is plausibly valid."""
     if len(name) < 3 or len(name) > 63:
@@ -355,7 +316,7 @@ def _probe_local(config: LoadingConfig) -> None:
     if not config.storage_root:
         raise HandlerError(
             "storage_root is required for local destination preflight",
-            details=_destination_details(config),
+            details=config.destination_details(),
         )
     check_local_storage_root(Path(config.storage_root))
 
@@ -373,7 +334,7 @@ def _probe_object_store(
     with the destination scheme and bucket/container in ``details``.
     """
     store = SparkFilesystemObjectStore(spark)
-    details = _destination_details(config)
+    details = config.destination_details()
     details["base_uri"] = base_uri
     fs_timeout_seconds = _filesystem_timeout_seconds()
 
@@ -508,7 +469,7 @@ def preflight_destinations(
             continue
         if config.destination not in OBJECT_STORE_DESTINATIONS:
             continue
-        key = _destination_dedup_key(config)
+        key = config.destination_dedup_key()
         if key in seen:
             continue
         seen.add(key)
@@ -518,7 +479,7 @@ def preflight_destinations(
         return
 
     for config in deduped:
-        details = _destination_details(config)
+        details = config.destination_details()
         _logger.debug(
             "Running destination preflight",
             extra_fields={**details, "write_probe": write_probe},

@@ -5,8 +5,9 @@ Factory for creating loader instances based on configuration.
 from typing import ClassVar, Dict, Type
 
 from src.config.config_models import LoadingConfig
-from src.loader.base_loader import BaseLoader, LoaderError
+from src.loader.base_loader import BaseLoader
 from src.loader.object_store_loader import ObjectStoreLoader
+from src.utils.exceptions import LoaderError
 
 
 class LoaderFactory:

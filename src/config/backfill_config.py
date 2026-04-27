@@ -30,6 +30,9 @@ class BackfillStaticDateConfig:
         False  # if False, windows contiguous (next_start=endDate+1); if True, boundary overlaps (next_start=endDate)
     )
 
+    def __post_init__(self) -> None:
+        self.increment = str(self.increment).strip().upper()
+
 
 @dataclass
 class BackfillReferenceConfig:
@@ -38,6 +41,10 @@ class BackfillReferenceConfig:
     field: str  # request input name of the driver (e.g. startDate)
     increment: str  # e.g. '15 DAY'
     limit: Any  # str or dict for dynamic (e.g. type: DATE, operation: TODAY)
+
+    def __post_init__(self) -> None:
+        self.field = str(self.field).strip()
+        self.increment = str(self.increment).strip().upper()
 
 
 @dataclass
@@ -66,7 +73,7 @@ def parse_increment(increment_str: str) -> relativedelta:
     """
     if not increment_str or not isinstance(increment_str, str):
         raise ValueError("increment must be a non-empty string")
-    parts = increment_str.strip().upper().split()
+    parts = increment_str.upper().split()
     if len(parts) != 2:
         raise ValueError(
             f"increment must be of form 'N DAY', 'N WEEK', or 'N MONTH', got: {increment_str!r}"
@@ -118,7 +125,7 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
         backfill = value.get("backfill")
         if not isinstance(backfill, dict):
             continue
-        bf_type = (backfill.get("type") or "").strip().upper()
+        bf_type = (backfill.get("type") or "").upper()
         if bf_type == BACKFILL_TYPE_STATIC_DATE:
             start = backfill.get("start")
             end = backfill.get("end")
@@ -130,7 +137,7 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
                 candidate_driver = BackfillStaticDateConfig(
                     start=start,
                     end=end,
-                    increment=str(increment).strip(),
+                    increment=increment,
                     inclusive=bool(inclusive),
                 )
                 parse_increment(candidate_driver.increment)
@@ -153,8 +160,8 @@ def get_backfill_config(input_values: Optional[Dict[str, Any]]) -> Optional[Back
                 continue
             try:
                 candidate_reference = BackfillReferenceConfig(
-                    field=str(ref_field).strip(),
-                    increment=str(ref_increment).strip(),
+                    field=ref_field,
+                    increment=ref_increment,
                     limit=limit,
                 )
                 parse_increment(candidate_reference.increment)

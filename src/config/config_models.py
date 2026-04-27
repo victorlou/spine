@@ -1015,6 +1015,15 @@ class ResourceConfig(BaseModel):
         default=None,
         description="Database table or view name for extract (required for database source types on this resource).",
     )
+
+    @field_validator("database_schema", "database_table", mode="before")
+    @classmethod
+    def strip_db_table_identifier(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = str(v).strip()
+        return stripped if stripped else None
+
     database_select_query: Optional[str] = Field(
         default=None,
         description="Optional full SQL query for extract; when set, schema/table may still be used for logging.",
@@ -1300,9 +1309,7 @@ class SourceConfig(BaseModel):
             for resource_name, resource in self.resources.items():
                 if not resource.enabled:
                     continue
-                sch = (resource.database_schema or "").strip()
-                tbl = (resource.database_table or "").strip()
-                if not sch or not tbl:
+                if not resource.database_schema or not resource.database_table:
                     raise ValueError(
                         f"{self.type.value} resource '{resource_name}' requires non-empty "
                         "database_schema and database_table"

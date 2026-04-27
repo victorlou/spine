@@ -1847,8 +1847,8 @@ class DynamicHandler(BaseHandler):
         """
         resource_config = resource_meta.config
         configured_fields = resource_config.fields
-        schema = str(resource_config.database_schema).strip()
-        table = str(resource_config.database_table).strip()
+        schema = resource_config.database_schema
+        table = resource_config.database_table
         request_context_count = len(request_contexts)
         extract_invocations = 0
         service.connect()

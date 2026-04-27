@@ -269,6 +269,37 @@ class LoadingConfig(BaseModel):
                 raise ValueError("azure_account is required for Azure destination")
         return self
 
+    def destination_dedup_key(self) -> tuple[str, ...]:
+        """Stable identity for a destination so the same bucket/root is probed once."""
+        if self.destination == "s3":
+            return ("s3", self.s3_bucket or "")
+        if self.destination == "gcs":
+            return ("gcs", self.gcs_bucket or "")
+        if self.destination == "azure_blob":
+            return ("azure_blob", self.azure_container or "", self.azure_account or "")
+        if self.destination == "local":
+            root = self.storage_root or ""
+            if not root:
+                return ("local", "")
+            return ("local", str(Path(root).expanduser().resolve()))
+        return (self.destination,)
+
+    def destination_details(self) -> Dict[str, Any]:
+        """Operator-readable destination context for errors and logs."""
+        if self.destination == "s3":
+            return {"destination": "s3", "s3_bucket": self.s3_bucket}
+        if self.destination == "gcs":
+            return {"destination": "gcs", "gcs_bucket": self.gcs_bucket}
+        if self.destination == "azure_blob":
+            return {
+                "destination": "azure_blob",
+                "azure_container": self.azure_container,
+                "azure_account": self.azure_account,
+            }
+        if self.destination == "local":
+            return {"destination": "local", "storage_root": self.storage_root}
+        return {"destination": self.destination}
+
     model_config = {"validate_assignment": True}
 
 
@@ -848,6 +879,15 @@ class TableReadOptions(BaseModel):
         default=None,
         description="Numeric (or date-castable) column for Spark parallel range reads.",
     )
+
+    @field_validator("partition_column", mode="before")
+    @classmethod
+    def normalize_partition_column(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = str(v).strip()
+        return stripped if stripped else None
+
     lower_bound: Optional[Union[int, float]] = Field(
         default=None,
         description="Inclusive lower bound for partition_column (operator-supplied).",
@@ -878,8 +918,7 @@ class TableReadOptions(BaseModel):
         """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
         if self.predicates is not None and len(self.predicates) > 0:
             return True
-        col = (self.partition_column or "").strip()
-        return bool(col)
+        return bool(self.partition_column)
 
     @model_validator(mode="after")
     def validate_partitioning(self) -> "TableReadOptions":
@@ -887,8 +926,7 @@ class TableReadOptions(BaseModel):
             raise ValueError("table_read_options.predicates must be non-empty when set")
 
         has_pred = self.predicates is not None and len(self.predicates) > 0
-        col = (self.partition_column or "").strip()
-        has_range = bool(col)
+        has_range = bool(self.partition_column)
 
         if has_pred and has_range:
             raise ValueError(
@@ -1220,6 +1258,14 @@ class SourceConfig(BaseModel):
         description="Extra JDBC properties or URL query parameters (driver-specific).",
     )
 
+    @field_validator("host", "username", "database", mode="before")
+    @classmethod
+    def strip_db_identifier(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = str(v).strip()
+        return stripped if stripped else None
+
     @model_validator(mode="after")
     def normalize_rest_base_url(self) -> "SourceConfig":
         """Strip trailing slashes from REST base URLs so path joins stay consistent."""
@@ -1249,7 +1295,7 @@ class SourceConfig(BaseModel):
                 raise ValueError(f"{self.type.value} source requires port")
             if not self.username or self.password is None:
                 raise ValueError(f"{self.type.value} source requires username and password")
-            if self.type == SourceType.POSTGRESQL and not (self.database or "").strip():
+            if self.type == SourceType.POSTGRESQL and not self.database:
                 raise ValueError(f"{self.type.value} source requires database")
             for resource_name, resource in self.resources.items():
                 if not resource.enabled:

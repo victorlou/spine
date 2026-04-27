@@ -28,7 +28,7 @@ from src.config.config_models import (
     SourceConfig,
     is_database_source_type,
 )
-from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS
+from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
 from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
 from src.loader.destination_preflight import preflight_destinations

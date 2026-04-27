@@ -43,7 +43,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from pyspark.sql import SparkSession
 
 from src.config.config_models import LoadingConfig
-from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS
+from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
 from src.config.spark_runtime import detect_managed_spark_platform
 from src.loader.local_storage import check_local_storage_root
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri

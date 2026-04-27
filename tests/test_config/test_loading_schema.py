@@ -1,6 +1,6 @@
-"""Tests for canonical loading destination helpers."""
+"""Tests for loading destination helpers and identity normalizers in loading_schema."""
 
-from src.config.loading_destinations import (
+from src.config.loading_schema import (
     OBJECT_STORE_DESTINATIONS,
     is_object_store_destination,
     normalize_loading_destination,

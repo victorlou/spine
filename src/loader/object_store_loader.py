@@ -13,7 +13,7 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig, LoadingFormat
-from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS
+from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
 from src.loader.base_loader import BaseLoader, LoaderError
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.logger import get_logger

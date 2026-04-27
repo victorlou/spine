@@ -21,10 +21,11 @@ from pydantic import (
     model_validator,
 )
 
-from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS, normalize_loading_destination
-from src.config.loading_fields import (
+from src.config.loading_schema import (
+    OBJECT_STORE_DESTINATIONS,
     normalize_azure_account_label,
     normalize_azure_container_label,
+    normalize_loading_destination,
     normalize_object_store_bucket_label,
 )
 from src.utils.dynamic_values import (

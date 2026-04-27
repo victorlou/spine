@@ -108,6 +108,23 @@ class SqlDatabaseService(BaseSourceService, ABC):
         self._validate_host_for_connect()
         self._validate_port_for_connect()
 
+    def _build_connection_properties(
+        self,
+        driver: str,
+        table_read_options: Optional[TableReadOptions] = None,
+    ) -> Dict[str, str]:
+        props: Dict[str, str] = {
+            "driver": driver,
+            "user": self.config.username or "",
+            "password": self.config.password or "",
+        }
+        if self.config.connection_params:
+            for k, v in self.config.connection_params.items():
+                props[str(k)] = str(v)
+        if table_read_options is not None and table_read_options.fetch_size is not None:
+            props["fetchsize"] = str(table_read_options.fetch_size)
+        return props
+
     def _ensure_extract_prerequisites(self) -> None:
         """Override when extract needs an established client (e.g. SQLAlchemy engine)."""
 
@@ -163,8 +180,8 @@ class SqlDatabaseService(BaseSourceService, ABC):
                     extra_log["fetch_size"] = table_read_options.fetch_size
                 if table_read_options.predicates:
                     extra_log["predicates_count"] = len(table_read_options.predicates)
-                if (table_read_options.partition_column or "").strip():
-                    extra_log["partition_column"] = table_read_options.partition_column.strip()
+                if table_read_options.partition_column:
+                    extra_log["partition_column"] = table_read_options.partition_column
                     extra_log["num_partitions"] = table_read_options.num_partitions
 
             defaults = self.settings.pipeline_config.defaults

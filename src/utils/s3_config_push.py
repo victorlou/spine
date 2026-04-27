@@ -42,8 +42,17 @@ def resolve_local_config_root(config_path: str | None = None) -> Path:
     return (repository_root() / "config" / p).resolve()
 
 
+def _trim_parsed_s3_uri_segment(segment: str) -> str:
+    """Trim whitespace and leading/trailing slashes on parsed ``s3://`` path parts (CLI input, not YAML config)."""
+    return segment.strip().strip("/")
+
+
 def parse_s3_uri(uri: str) -> Tuple[str, str]:
-    """Parse ``s3://bucket`` or ``s3://bucket/prefix`` into bucket and key prefix."""
+    """Parse ``s3://bucket`` or ``s3://bucket/prefix`` into bucket and key prefix path.
+
+    Bucket and prefix are trimmed once here at the parse boundary so upload logic uses
+    canonical strings without importing pipeline loading validators.
+    """
     u = uri.strip()
     if not u.startswith("s3://"):
         raise ValueError(f"S3 URI must start with s3://, got: {uri!r}")
@@ -54,14 +63,11 @@ def parse_s3_uri(uri: str) -> Tuple[str, str]:
         bucket, prefix = rest.split("/", 1)
     else:
         bucket, prefix = rest, ""
+    bucket = _trim_parsed_s3_uri_segment(bucket)
     if not bucket:
         raise ValueError("S3 URI has an empty bucket name")
+    prefix = _trim_parsed_s3_uri_segment(prefix)
     return bucket, prefix
-
-
-def _normalize_key_prefix(prefix: str) -> str:
-    p = prefix.strip().strip("/")
-    return f"{p}/" if p else ""
 
 
 def _is_excluded_config_path(rel: str, name: str) -> bool:
@@ -113,7 +119,7 @@ def push_config_to_s3(s3_uri: str, config_root: Path | None = None) -> int:
     would be uploaded (empty tree or no matching files).
     """
     bucket, prefix = parse_s3_uri(s3_uri)
-    key_prefix = _normalize_key_prefix(prefix)
+    key_prefix = f"{prefix}/" if prefix else ""
     root = resolve_local_config_root() if config_root is None else Path(config_root).resolve()
 
     pairs: list[Tuple[Path, str]] = list(iter_operator_config_files(root))

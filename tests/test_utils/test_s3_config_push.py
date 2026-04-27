@@ -24,6 +24,10 @@ def test_parse_s3_uri_strips_whitespace() -> None:
     assert parse_s3_uri("  s3://b/p  ") == ("b", "p")
 
 
+def test_parse_s3_uri_trims_trailing_slashes_on_prefix() -> None:
+    assert parse_s3_uri("s3://my-bucket/prefix/") == ("my-bucket", "prefix")
+
+
 @pytest.mark.parametrize(
     "bad",
     [

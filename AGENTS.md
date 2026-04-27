@@ -32,6 +32,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - Do not commit operator-local config, secrets, or internal-only endpoints. Public templates live in `config/defaults.example.yml` and `config/examples/`.
 - If you change config schema, also update the relevant examples and docs in `config/README.md` and `docs/configuration/`.
 - Respect `CONFIG_PATH` behavior in `src/config/settings.py` when changing config resolution.
+- Loading identity strings (object-store bucket/container/account labels, slash-trimmed `prefix`, REST `base_url` trailing slashes) are normalized during Pydantic validation. Shared helpers live in `src/config/loading_fields.py`. Spark base URIs use `loading_base_uri(LoadingConfig)` in `src/loader/object_store.py`: it expects **validated** config only and does not re-normalize identity fields (resolve `storage_root` to `file:` URIs still happens there). CLI-only inputs—for example operator `s3://` URIs for config promotion—normalize once at parse time in `src/utils/s3_config_push.parse_s3_uri`, not via pipeline loading validators. Path joining for Spark segments and HTTP URL composition remain in loader/service helpers.
 
 ## Extending Spine
 

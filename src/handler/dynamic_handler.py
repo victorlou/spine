@@ -146,7 +146,7 @@ class DynamicHandler(BaseHandler):
         if not loading.enabled:
             return None
         if loading.destination in OBJECT_STORE_DESTINATIONS:
-            prefix = (loading.prefix or "").strip()
+            prefix = loading.prefix or ""
             if not prefix:
                 return loading.model_copy(update={"prefix": f"{source_name}/{resource_name}"})
         return loading

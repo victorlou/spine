@@ -64,19 +64,19 @@ _AZURE_CONTAINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 def _destination_dedup_key(config: LoadingConfig) -> Tuple[str, ...]:
     """Stable identity for a destination so the same bucket/root is probed once."""
     if config.destination == "s3":
-        return ("s3", (config.s3_bucket or "").strip())
+        return ("s3", config.s3_bucket or "")
     if config.destination == "gcs":
-        return ("gcs", (config.gcs_bucket or "").strip())
+        return ("gcs", config.gcs_bucket or "")
     if config.destination == "azure_blob":
         return (
             "azure_blob",
-            (config.azure_container or "").strip(),
-            (config.azure_account or "").strip(),
+            config.azure_container or "",
+            config.azure_account or "",
         )
     if config.destination == "local":
         # Resolve to absolute so two different relative spellings of the same root
         # are recognized as one destination.
-        root = (config.storage_root or "").strip()
+        root = config.storage_root or ""
         if not root:
             return ("local", "")
         return ("local", str(Path(root).expanduser().resolve()))
@@ -132,12 +132,12 @@ def _validate_destination_identity(config: LoadingConfig, details: Dict[str, Any
         )
 
     if config.destination == "s3":
-        name = (config.s3_bucket or "").strip().strip("/")
+        name = config.s3_bucket or ""
         issue = _s3_bucket_name_issue(name)
         if issue:
             _fail(f"Invalid S3 bucket name {name!r}: {issue}")
     elif config.destination == "gcs":
-        name = (config.gcs_bucket or "").strip().strip("/")
+        name = config.gcs_bucket or ""
         if not name:
             _fail("GCS bucket name is empty.")
         if "://" in name or any(c.isspace() for c in name):
@@ -153,8 +153,8 @@ def _validate_destination_identity(config: LoadingConfig, details: Dict[str, Any
                 "(lowercase letters, digits, hyphen, underscore, dot; start/end alphanumeric)."
             )
     elif config.destination == "azure_blob":
-        account = (config.azure_account or "").strip().lower()
-        container = (config.azure_container or "").strip().strip("/").lower()
+        account = config.azure_account or ""
+        container = config.azure_container or ""
         if not _AZURE_ACCOUNT_RE.match(account):
             _fail(
                 f"Azure storage account {account!r} must be 3-24 lowercase letters or digits "
@@ -536,14 +536,7 @@ def preflight_destinations(
             )
 
         try:
-            base_uri = loading_base_uri(
-                destination=config.destination,
-                storage_root=config.storage_root,
-                s3_bucket=config.s3_bucket,
-                gcs_bucket=config.gcs_bucket,
-                azure_container=config.azure_container,
-                azure_account=config.azure_account,
-            )
+            base_uri = loading_base_uri(config)
         except ValueError as e:
             raise HandlerError(
                 f"Invalid loading destination configuration: {e!s}",

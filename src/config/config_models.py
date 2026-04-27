@@ -15,12 +15,18 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    TypeAdapter,
     ValidationInfo,
     field_validator,
     model_validator,
 )
 
 from src.config.loading_destinations import OBJECT_STORE_DESTINATIONS, normalize_loading_destination
+from src.config.loading_fields import (
+    normalize_azure_account_label,
+    normalize_azure_container_label,
+    normalize_object_store_bucket_label,
+)
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicOrStaticValue,
@@ -149,6 +155,28 @@ class LoadingConfig(BaseModel):
             object.__setattr__(self, "azure_container", effective)
             object.__setattr__(self, "bucket", effective)
 
+        return self
+
+    @model_validator(mode="after")
+    def normalize_object_store_identity_fields(self) -> "LoadingConfig":
+        """Normalize bucket/container/account/storage labels at validation time."""
+        dest = self.destination
+        if dest == "s3":
+            nb = normalize_object_store_bucket_label(self.s3_bucket)
+            object.__setattr__(self, "s3_bucket", nb)
+            object.__setattr__(self, "bucket", nb)
+        elif dest == "gcs":
+            nb = normalize_object_store_bucket_label(self.gcs_bucket)
+            object.__setattr__(self, "gcs_bucket", nb)
+            object.__setattr__(self, "bucket", nb)
+        elif dest == "azure_blob":
+            nc = normalize_azure_container_label(self.azure_container)
+            na = normalize_azure_account_label(self.azure_account)
+            object.__setattr__(self, "azure_container", nc)
+            object.__setattr__(self, "bucket", nc)
+            object.__setattr__(self, "azure_account", na)
+        elif dest == "local" and self.storage_root is not None:
+            object.__setattr__(self, "storage_root", str(self.storage_root).strip())
         return self
 
     @field_validator("destination")
@@ -1185,6 +1213,19 @@ class SourceConfig(BaseModel):
         default=None,
         description="Extra JDBC properties or URL query parameters (driver-specific).",
     )
+
+    @model_validator(mode="after")
+    def normalize_rest_base_url(self) -> "SourceConfig":
+        """Strip trailing slashes from REST base URLs so path joins stay consistent."""
+        if self.base_url is not None:
+            normalized = str(self.base_url).rstrip("/")
+            if normalized != str(self.base_url):
+                object.__setattr__(
+                    self,
+                    "base_url",
+                    TypeAdapter(HttpUrl).validate_python(normalized),
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_source_type(self):

@@ -96,7 +96,6 @@ class ObjectStoreLoader(BaseLoader):
         if not prefix:
             return "data"
 
-        # Remove any leading/trailing slashes and ensure 'data' subdirectory
         clean_prefix = prefix.strip("/")
         return f"{clean_prefix}/data"
 
@@ -516,14 +515,7 @@ class ObjectStoreLoader(BaseLoader):
             raise LoaderError("Spark session not set. Call set_spark_session first.")
 
         try:
-            base_uri = loading_base_uri(
-                destination=config.destination,
-                storage_root=config.storage_root,
-                s3_bucket=config.s3_bucket,
-                gcs_bucket=config.gcs_bucket,
-                azure_container=config.azure_container,
-                azure_account=config.azure_account,
-            )
+            base_uri = loading_base_uri(config)
         except ValueError as e:
             raise LoaderError(str(e)) from e
 
@@ -644,14 +636,7 @@ class ObjectStoreLoader(BaseLoader):
         if not self.spark:
             return False
         try:
-            base_uri = loading_base_uri(
-                destination=config.destination,
-                storage_root=config.storage_root,
-                s3_bucket=config.s3_bucket,
-                gcs_bucket=config.gcs_bucket,
-                azure_container=config.azure_container,
-                azure_account=config.azure_account,
-            )
+            base_uri = loading_base_uri(config)
         except ValueError:
             return False
 

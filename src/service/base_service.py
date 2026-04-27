@@ -13,6 +13,7 @@ from urllib3.util.retry import Retry
 from src.config.settings import Settings
 from src.utils.exceptions import ServiceError
 from src.utils.logger import get_logger
+from src.utils.url_join import join_http_base_and_path
 
 
 class BaseSourceService(ABC):
@@ -151,8 +152,7 @@ class BaseSourceService(ABC):
         Raises:
             ServiceError: If the request fails
         """
-        base = self.get_base_url().rstrip("/")
-        url = f"{base}/{endpoint.lstrip('/')}"
+        url = join_http_base_and_path(self.get_base_url(), endpoint)
         headers = self.get_headers()
 
         try:

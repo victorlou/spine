@@ -5,21 +5,16 @@ from typing import Optional, Protocol, runtime_checkable
 
 from pyspark.sql import SparkSession
 
-from src.config.loading_destinations import normalize_loading_destination
+from src.config.config_models import LoadingConfig
 from src.utils.exceptions import LoaderError
 
 
-def loading_base_uri(
-    *,
-    destination: str,
-    storage_root: Optional[str] = None,
-    s3_bucket: Optional[str] = None,
-    gcs_bucket: Optional[str] = None,
-    azure_container: Optional[str] = None,
-    azure_account: Optional[str] = None,
-) -> str:
+def loading_base_uri(config: LoadingConfig) -> str:
     """
     Return the authority + path prefix URI for Spark writes (no trailing slash).
+
+    Expects a validated ``LoadingConfig`` (bucket/container/account strings are already
+    canonical from Pydantic). Does not re-normalize identity fields.
 
     - ``s3``    → ``s3a://{s3_bucket}``
     - ``local`` → ``file:///...`` from resolved ``storage_root``. After ``ConfigLoader``
@@ -27,32 +22,35 @@ def loading_base_uri(
       root: the directory containing ``src/``). Constructing ``LoadingConfig`` without the
       loader resolves relative paths against the current working directory instead.
     - ``gcs``   → ``gs://{gcs_bucket}``
-    - ``azure_blob`` / ``blob`` / ``azure`` → ``abfs://{azure_container}@{azure_account}.dfs.core.windows.net``
+    - ``azure_blob`` → ``abfs://{azure_container}@{azure_account}.dfs.core.windows.net``
     """
-    normalized_destination = normalize_loading_destination(destination)
+    dest = config.destination
 
-    if normalized_destination == "s3":
-        if not s3_bucket:
+    if dest == "s3":
+        b = config.s3_bucket
+        if not b:
             raise ValueError("s3_bucket is required for S3 loading destination")
-        return f"s3a://{s3_bucket.strip().strip('/')}"
-    if normalized_destination == "local":
-        if not storage_root:
+        return f"s3a://{b}"
+    if dest == "local":
+        sr = config.storage_root
+        if not sr:
             raise ValueError("storage_root is required for local loading destination")
-        root = Path(storage_root).expanduser().resolve()
+        root = Path(sr).expanduser().resolve()
         return root.as_uri().rstrip("/")
-    if normalized_destination == "gcs":
-        if not gcs_bucket:
+    if dest == "gcs":
+        b = config.gcs_bucket
+        if not b:
             raise ValueError("gcs_bucket is required for GCS loading destination")
-        return f"gs://{gcs_bucket.strip().strip('/')}"
-    if normalized_destination == "azure_blob":
-        if not azure_container:
+        return f"gs://{b}"
+    if dest == "azure_blob":
+        container = config.azure_container
+        account = config.azure_account
+        if not container:
             raise ValueError("azure_container is required for Azure loading destination")
-        if not azure_account:
+        if not account:
             raise ValueError("azure_account is required for Azure loading destination")
-        container = azure_container.strip().strip("/")
-        account = azure_account.strip()
         return f"abfs://{container}@{account}.dfs.core.windows.net"
-    raise ValueError(f"Unsupported loading destination: {destination!r}")
+    raise ValueError(f"Unsupported loading destination: {dest!r}")
 
 
 @runtime_checkable

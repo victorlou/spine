@@ -56,15 +56,16 @@ class AuditRecorder:
     def _flush_to_delta(
         self,
         spark: SparkSession,
-        control_bucket: str,
+        bucket: str,
+        filesystem_scheme: str,
         request_rows: List[Dict[str, Any]],
         response_rows: List[Dict[str, Any]],
     ) -> None:
         """
-        Append audit records to Delta tables in S3.
+        Append audit records to Delta tables under ``{scheme}://{bucket}/logs/``.
         Does not re-raise on failure; logs and continues.
         """
-        base_path = f"s3a://{control_bucket}/logs"
+        base_path = f"{filesystem_scheme}://{bucket}/logs"
         requests_path = f"{base_path}/api_requests"
         responses_path = f"{base_path}/api_responses"
 
@@ -104,7 +105,9 @@ class AuditRecorder:
     def flush(
         self,
         spark: Any,
-        control_bucket: str,
+        bucket: str,
+        *,
+        filesystem_scheme: str = "s3a",
     ) -> None:
         """
         Write buffered records to Delta tables and clear buffers.
@@ -113,9 +116,13 @@ class AuditRecorder:
 
         Args:
             spark: SparkSession (from SparkManager)
-            control_bucket: S3 bucket for audit tables (e.g. from S3_CONTROL_BUCKET)
+            bucket: Storage authority used by ``filesystem_scheme`` for audit tables
+                (e.g. ``my-bucket`` for ``s3a``/``gs``, or
+                ``container@account.dfs.core.windows.net`` for ``abfs``)
+            filesystem_scheme: ``s3a`` for AWS S3, ``gs`` for Google Cloud Storage,
+                or ``abfs`` for Azure Blob/ADLS Gen2
         """
-        if not control_bucket or not spark:
+        if not bucket or not spark:
             if self._requests or self._responses:
                 self.logger.debug(
                     "Audit flush skipped (no bucket or Spark)",
@@ -139,7 +146,8 @@ class AuditRecorder:
 
         self._flush_to_delta(
             spark=spark,
-            control_bucket=control_bucket,
+            bucket=bucket,
+            filesystem_scheme=filesystem_scheme,
             request_rows=request_rows,
             response_rows=response_rows,
         )

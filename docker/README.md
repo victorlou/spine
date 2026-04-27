@@ -101,7 +101,19 @@ docker run --rm \
 ```
 
 
-### AWS credentials options
+### Spark runtime and object-store connectors
+
+Spine builds Spark Hadoop filesystem and Ivy package lists from your **selected pipeline config** (effective loading destinations) and from **`defaults.spark_runtime`** in `defaults.yml`: `profile` (`auto` / `local_dev` / `cluster_managed`) plus **`s3_connector_mode`**, **`gcs_connector_mode`**, and **`azure_connector_mode`** (`auto` / `packages` / `external`). Prefer editing YAML there; use environment variables only when the image or CI cannot carry config changes.
+
+| Concern | Primary (config) | Optional env override |
+|--------|-------------------|------------------------|
+| S3 / S3A (`hadoop-aws`, Ivy) | `defaults.spark_runtime.s3_connector_mode` | `SPARK_S3_CONNECTOR_MODE` |
+| GCS | `defaults.spark_runtime.gcs_connector_mode` | `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (when mode is `packages`; defaults to shaded connector JAR on Maven Central) |
+| Azure Blob / ABFS | `defaults.spark_runtime.azure_connector_mode` | `SPARK_AZURE_CONNECTOR_MODE` |
+
+With `auto`, Databricks and EMR default to **`external`** for all three (cluster-provided jars); other environments default to **`packages`**. Use **`external`** when your Spark image or platform already ships connectors and `fs.*` auth wiring.
+
+### AWS credentials options (only needed for S3 destinations)
 
 Profile-based (`AWS_PROFILE` in `.env`):
 
@@ -142,7 +154,7 @@ docker run --rm \
   -e AWS_ACCESS_KEY_ID=... \
   -e AWS_SECRET_ACCESS_KEY=... \
   -e AWS_SESSION_TOKEN=... \
-  -e AWS_REGION=ap-southeast-2 \
+  -e AWS_REGION=us-east-1 \
   ghcr.io/victorlou/spine:vX.Y.Z \
   --select your_source
 ```
@@ -157,6 +169,79 @@ If you see `The config profile (...) could not be found`:
 4. If using SSO profile, mount `.aws` writable (`-v "$HOME/.aws:/root/.aws"`), not `:ro`.
 5. Re-run `aws sso login --profile your_profile` if using SSO.
 6. Confirm region is set (`AWS_REGION` or profile region).
+
+### GCP credentials options (only needed for GCS destinations)
+
+Spark's GCS connector reads Google Application Default Credentials (ADC) at the JVM level — `spark.hadoop.fs.gs.auth.type` defaults to `APPLICATION_DEFAULT` and the account from `gcloud auth login` is **not** used.
+
+Service-account JSON via `GOOGLE_APPLICATION_CREDENTIALS`:
+
+```bash
+docker run --rm \
+  -v "$(pwd)/config:/config:ro" \
+  -v "$(pwd)/secrets/gcp-sa.json:/secrets/gcp-sa.json:ro" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-sa.json \
+  --env-file .env \
+  ghcr.io/victorlou/spine:vX.Y.Z \
+  --select your_source
+```
+
+ADC mount for local development (uses `gcloud auth application-default login` cache):
+
+```bash
+gcloud auth application-default login
+
+docker run --rm \
+  -v "$(pwd)/config:/config:ro" \
+  -v "$HOME/.config/gcloud:/root/.config/gcloud:ro" \
+  --env-file .env \
+  ghcr.io/victorlou/spine:vX.Y.Z \
+  --select your_source
+```
+
+On Dataproc / GKE Workload Identity / GCE, omit both — the connector picks up the platform identity automatically. The destination preflight will surface a clear `HandlerError(operation="destination_preflight")` if the JVM cannot authenticate against your `gcs_bucket`.
+
+### Azure credentials options (only needed for Azure Blob / ABFS destinations)
+
+Spark's ABFS connector reads Azure auth from Hadoop config / environment variables. Spine does not run an Azure preflight at settings import time; the unified destination preflight probes the configured container at handler startup.
+
+Storage account key (development convenience):
+
+```bash
+docker run --rm \
+  -v "$(pwd)/config:/config:ro" \
+  -e AZURE_STORAGE_ACCOUNT=mystorageaccount \
+  -e AZURE_STORAGE_KEY=... \
+  --env-file .env \
+  ghcr.io/victorlou/spine:vX.Y.Z \
+  --select your_source
+```
+
+Connection string:
+
+```bash
+docker run --rm \
+  -v "$(pwd)/config:/config:ro" \
+  -e AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net" \
+  --env-file .env \
+  ghcr.io/victorlou/spine:vX.Y.Z \
+  --select your_source
+```
+
+Service principal / managed identity / OAuth: configure `fs.azure.account.auth.type.<account>.dfs.core.windows.net` and the `fs.azure.account.oauth2.*` keys in your Spark runtime (Hadoop config) — typically through your platform image (Databricks instance profile, AKS workload identity, etc.). On managed Spark platforms, omit AZURE_* env vars and rely on the platform identity.
+
+For local development against a real account, mount `~/.azure` (CLI cache) writable so token refresh works:
+
+```bash
+az login
+
+docker run --rm \
+  -v "$(pwd)/config:/config:ro" \
+  -v "$HOME/.azure:/root/.azure" \
+  --env-file .env \
+  ghcr.io/victorlou/spine:vX.Y.Z \
+  --select your_source
+```
 
 ## Private package index (optional)
 
@@ -183,3 +268,4 @@ docker build --platform linux/amd64 ...
 - The container uses Python 3.12 and OpenJDK 21 for Spark
 - Redis runs in-memory inside the container
 - Mount `.env` as read-only (`:ro`) for security
+- Spark startup resolves several JARs at launch (Delta, Iceberg, ngdbc, and destination-specific connectors); first-run dependency resolution adds time

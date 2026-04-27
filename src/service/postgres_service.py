@@ -1,5 +1,6 @@
 """PostgreSQL ingestion via Spark JDBC."""
 
+from functools import cached_property
 from typing import Optional
 
 from pyspark.sql import DataFrame, SparkSession
@@ -66,7 +67,7 @@ class PostgresService(SqlDatabaseService):
         select_query: Optional[str],
         table_read_options: Optional[TableReadOptions] = None,
     ) -> DataFrame:
-        jdbc_url = self._build_jdbc_url()
+        jdbc_url = self._jdbc_url
         table_ref = self._table_label_for_log(schema, table)
 
         if select_query:
@@ -74,16 +75,9 @@ class PostgresService(SqlDatabaseService):
         else:
             query = f"(SELECT * FROM {table_ref}) AS data_query"
 
-        connection_properties: dict[str, str] = {
-            "driver": self.POSTGRES_JDBC_DRIVER,
-            "user": self.config.username or "",
-            "password": self.config.password or "",
-        }
-        if self.config.connection_params:
-            for k, v in self.config.connection_params.items():
-                connection_properties[str(k)] = str(v)
-        if table_read_options is not None and table_read_options.fetch_size is not None:
-            connection_properties["fetchsize"] = str(table_read_options.fetch_size)
+        connection_properties = self._build_connection_properties(
+            self.POSTGRES_JDBC_DRIVER, table_read_options
+        )
 
         reader = spark_session.read
         if table_read_options is not None and table_read_options.predicates:
@@ -93,12 +87,11 @@ class PostgresService(SqlDatabaseService):
                 predicates=table_read_options.predicates,
                 properties=connection_properties,
             )
-        if table_read_options is not None and (table_read_options.partition_column or "").strip():
-            col = table_read_options.partition_column.strip()
+        if table_read_options is not None and table_read_options.partition_column:
             return reader.jdbc(
                 url=jdbc_url,
                 table=query,
-                column=col,
+                column=table_read_options.partition_column,
                 lowerBound=table_read_options.lower_bound,
                 upperBound=table_read_options.upper_bound,
                 numPartitions=table_read_options.num_partitions,
@@ -110,9 +103,10 @@ class PostgresService(SqlDatabaseService):
             properties=connection_properties,
         )
 
-    def _build_jdbc_url(self) -> str:
+    @cached_property
+    def _jdbc_url(self) -> str:
         port = int(self.config.port)  # type: ignore[arg-type]
-        base_url = f"jdbc:postgresql://{self.config.host}:{port}/" f"{self.config.database}"
+        base_url = f"jdbc:postgresql://{self.config.host}:{port}/{self.config.database}"
         if self.config.connection_params:
             url_params = {
                 k: v

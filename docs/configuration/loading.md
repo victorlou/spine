@@ -4,29 +4,68 @@
 
 - [Destinations](#destinations)
   - [Amazon S3](#amazon-s3)
+  - [Google Cloud Storage](#google-cloud-storage)
+  - [Azure Blob Storage (ABFS)](#azure-blob-storage-abfs)
   - [Local filesystem](#local-filesystem)
-  - [Other object stores (preview)](#other-object-stores-preview)
+  - [Other object stores](#other-object-stores)
 - [Delta Save Modes](#delta-save-modes)
   - [Overwrite](#overwrite)
   - [Append](#append)
   - [Merge (Upsert)](#merge-upsert)
+- [Iceberg](#iceberg)
+  - [Append](#append-1)
+  - [Overwrite](#overwrite-1)
+  - [Merge (preview)](#merge-preview)
+  - [Current limitations](#current-limitations)
 - [Quick reference](#quick-reference)
+- [Spark Runtime Readiness](#spark-runtime-readiness)
 
 ## Destinations
 
-Loading uses Spark with Hadoop `FileSystem` URIs. Use **`destination: local`** with **`storage_root`** and **`prefix`** to write under a local directory as `file://` URIs, or **`destination: s3`** with **`bucket`** and **`prefix`** for Amazon S3. If your `defaults.yml` omits a `defaults.loading` block entirely, Spine applies a built-in default of **`destination: local`** with relative **`storage_root: ".spine/local-output"`** (resolved under the **repository root**—the directory that contains `src/`—so in a normal checkout it lands next to `config/`) and a placeholder **`prefix`**; copy [`config/defaults.example.yml`](../../config/defaults.example.yml) for an explicit starting point.
+Loading uses Spark with Hadoop `FileSystem` URIs. Use **`destination: local`** with **`storage_root`** and **`prefix`** to write under a local directory as `file://` URIs, or cloud destinations (`s3`, `gcs`, `blob`) with destination-specific bucket/container fields and **`prefix`**. If your `defaults.yml` omits a `defaults.loading` block entirely, Spine applies a built-in default of **`destination: local`** with relative **`storage_root: ".spine/local-output"`** (resolved under the **repository root**—the directory that contains `src/`—so in a normal checkout it lands next to `config/`) and a placeholder **`prefix`**; copy [`config/defaults.example.yml`](../../config/defaults.example.yml) for an explicit starting point.
 
 Credentials and connectors follow your Spark deployment (for example IAM on AWS, or Hadoop `fs.*` settings for other schemes).
 
 ### Amazon S3
 
-Use `destination: "s3"`, `bucket`, and `prefix` as in the examples below. `prefix` must look like `source_name/resource_name` (not a single segment).
+Use `destination: "s3"` with `s3_bucket` (canonical) or `bucket` (alias), and `prefix`.
+If both `s3_bucket` and `bucket` are set with different values, configuration validation fails.
+
+### Google Cloud Storage
+
+Use `destination: "gcs"` with `gcs_bucket` (canonical) or `bucket` (alias), and `prefix`.
+If both `gcs_bucket` and `bucket` are set with different values, configuration validation fails.
+
+```yaml
+loading:
+  destination: "gcs"
+  format: "delta"
+  write_mode: "overwrite"
+  gcs_bucket: "my-gcs-bucket"
+  prefix: "source/resource"
+```
+
+### Azure Blob Storage (ABFS)
+
+Use `destination: "blob"` with `azure_container` (canonical) or `bucket` (alias), plus `azure_account`.
+If both `azure_container` and `bucket` are set with different values, configuration validation fails.
+Compatibility aliases `destination: "azure"` and `destination: "azure_blob"` are also accepted and normalized internally to `azure_blob`.
+
+```yaml
+loading:
+  destination: "blob"
+  format: "delta"
+  write_mode: "overwrite"
+  azure_container: "my-container"
+  azure_account: "my-storage-account"
+  prefix: "source/resource"
+```
 
 ### Local filesystem
 
 **`storage_root`** may be **absolute** or **relative**. Relative values are resolved when the operator config is loaded: they are joined to the **repository root** (the directory that contains `src/`), not to `CONFIG_PATH` or the process current working directory. For a normal checkout `.../myapp/config/`, output goes under `.../myapp/` (for example `.../myapp/.spine/local-output`), not under `config/`. If `CONFIG_PATH` points at YAML outside that tree (for example an absolute mount), relative `storage_root` still resolves under the Spine install root—use an absolute `storage_root` when output should live with that mount.
 
-The same `prefix`, `format`, `write_mode`, and `merge_keys` rules apply as for S3.
+The same `prefix`, `format`, `write_mode`, and `merge_keys` rules apply across all object-store destinations.
 
 **Recommended for dev/CI:** use a path under the repo that is gitignored, for example:
 
@@ -52,7 +91,7 @@ loading:
 
 At startup validation, the **resolved** directory must already exist and be writable by the process. The check lives in `src/loader/local_storage.py` and runs from the handler during configuration validation.
 
-### Other object stores (preview)
+### Other object stores
 
 Spark can write to **`gs://`** or **`abfs://`** (and other schemes) when the correct Hadoop filesystem implementation and credentials are on the classpath and configured. Spine does not ship those connectors; operators add jars and Spark config as usual. Path and filesystem operations go through the Hadoop `FileSystem` layer in `src/loader/object_store.py`.
 
@@ -108,12 +147,95 @@ loading:
 - Supports composite keys (multiple columns)
 - Tables are created automatically if they don't exist
 
+## Iceberg
+
+When using Iceberg format, Spine writes through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, and for local writes it is rooted at the configured `storage_root`. Spine first resolves the final table path from that warehouse root plus the configured `prefix`, then removes the warehouse root from the resolved path and converts the remaining path into a catalog table identifier by replacing `/` with `.` and prefixing it with `iceberg.`. For example, if the warehouse root is `s3a://my-bucket` and the resolved table path is `a://my-bucket/source/resource`, Spine derives the catalog table identifier `iceberg.source.resource`.
+
+**Available modes**: `overwrite`, `append`, `merge`
+
+### Append
+
+Append writes add rows to the existing Iceberg table, creating the table on first write when it does not already exist.
+
+```yaml
+loading:
+  destination: "local"
+  format: "iceberg"
+  write_mode: "append"
+  storage_root: ".spine/local-iceberg-warehouse"
+  prefix: "source/resource"
+```
+
+### Overwrite
+
+Overwrite replaces the contents of the target Iceberg table.
+
+```yaml
+loading:
+  destination: "s3"
+  format: "iceberg"
+  write_mode: "overwrite"
+  bucket: "my-bucket"
+  prefix: "source/resource"
+```
+
+### Merge (preview)
+
+Merge mode performs an Iceberg `MERGE INTO` using the configured `merge_keys`. If the table does not exist yet, Spine creates it first and later runs merges against the catalog table.
+
+```yaml
+loading:
+  destination: "s3"
+  format: "iceberg"
+  write_mode: "merge"
+  merge_keys: ["id"]
+  bucket: "my-bucket"
+  prefix: "source/resource"
+```
+
+### Current limitations
+
+Iceberg support is still in an early merge-support phase. Plan around the following current behavior:
+
+- `merge_keys` is required for Iceberg merge mode
+- Merge updates only columns present in both the source data and the existing target table
+- Merge inserts are shaped to the current target schema; target-only columns are filled with typed `NULL`
+- The current merge path does not auto-evolve the target schema before `MERGE INTO`; if the source introduces new columns, use append/overwrite first or evolve the table separately
+- Iceberg table existence is currently detected from filesystem metadata under the resolved table path
+
 ## Quick reference
 
 | `destination` | Required fields | Notes |
 |---------------|-----------------|--------|
-| `s3` | `bucket`, `prefix` | `prefix` uses the `source/resource` shape described above. Set **`destination: "s3"`** on the resource (or in defaults) whenever you set `bucket`; shallow merge with **`destination: local`** defaults would otherwise keep `local`. |
+| `s3` | `s3_bucket` (or `bucket` alias), `prefix` | `prefix` uses the `source/resource` shape described above. Set **`destination: "s3"`** on the resource (or in defaults) whenever you set `s3_bucket`/`bucket`; shallow merge with **`destination: local`** defaults would otherwise keep `local`. |
+| `gcs` | `gcs_bucket` (or `bucket` alias), `prefix` | Requires GCS Hadoop connector and credentials in Spark. |
+| `blob` (`azure`, `azure_blob` aliases) | `azure_container` (or `bucket` alias), `azure_account`, `prefix` | Uses ABFS URI form `abfs://container@account.dfs.core.windows.net`. |
 | `local` | `storage_root`, `prefix` | `storage_root` may be absolute, or **relative to the repository root** (directory containing `src/`). Relative values are resolved when the config is loaded. |
 | *(omitted `defaults.loading`)* | *(built-in default)* | Same as **`local`** with **`storage_root: ".spine/local-output"`** (resolved under the repository root) and **`prefix: "default/output"`**; override per resource or in **`defaults.yml`**. |
 
+For table formats, `format: "delta"` and `format: "iceberg"` both use the `source/resource`-style prefix directly as the table location. For Iceberg, Spine resolves the final table path under the destination-specific warehouse root (`s3://<bucket-name>` for S3, `storage_root` for local), removes that warehouse root, and converts the remaining path into the catalog table name by replacing `/` with `.` and prefixing it with `iceberg.`.
+
 Filesystem helpers for loaders live under **`src/loader/`** (for example `object_store.py`, `local_storage.py`).
+
+## Spark Runtime Readiness
+
+Spine composes Spark connector packages and Hadoop filesystem settings from the effective destination set in your selected pipeline config and from **`defaults.spark_runtime`** (see [`config/defaults.example.yml`](../../config/defaults.example.yml)).
+
+| Destination | Required loading fields | Spark connector expectation | Auth expectation |
+|-------------|-------------------------|-----------------------------|------------------|
+| `local` | `storage_root`, `prefix` | none | local filesystem permissions |
+| `s3` | `s3_bucket` (or `bucket` alias), `prefix` | `fs.s3a.*` settings; `hadoop-aws` via Ivy when `defaults.spark_runtime.s3_connector_mode` resolves to `packages` | IAM role, profile, or environment credentials (or explicit keys in local dev paths); S3A region from AWS chain / env, not `spark_runtime` |
+| `gcs` | `gcs_bucket` (or `bucket` alias), `prefix` | Shaded GCS Hadoop connector JAR on `spark.jars` (default Maven Central URL) + `fs.gs.*` implementation | runtime-provided Google auth (ADC/service account/workload identity) |
+| `azure_blob` (`blob`/`azure`) | `azure_container` (or `bucket` alias), `azure_account`, `prefix` | ABFS connector + `fs.abfs.*` implementation | runtime-provided Azure storage auth |
+
+**Configuration-first:** set `defaults.spark_runtime.profile` (`auto`, `local_dev`, or `cluster_managed`) and `s3_connector_mode` / `gcs_connector_mode` / `azure_connector_mode` (`auto`, `packages`, or `external`). With `auto`, Spine inspects the process environment: on Databricks and EMR, all three default to `external` (connectors expected on the cluster); elsewhere they default to `packages` (Ivy for Delta/S3/Azure connectors; GCS uses the shaded connector JAR on `spark.jars`). S3A endpoint **region** is not part of `spark_runtime`; it follows the AWS credential chain and standard AWS environment variables.
+
+**Optional environment overrides** (same semantics as YAML when set): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (defaults to the official shaded `gcs-connector` JAR on Maven Central when mode is `packages`), `SPARK_AZURE_CONNECTOR_MODE`, `SPINE_GCS_AUTH_TYPE` (defaults to `APPLICATION_DEFAULT`; set `COMPUTE_ENGINE` only when you intentionally rely on GCE metadata). Use these when CI or a container image cannot carry pipeline YAML changes.
+
+### Destination preflight
+
+Spine probes every effective loading destination immediately after the Spark session is initialised, before any source/resource ingestion runs. The probe is **cloud-agnostic and read-only** by default: for each unique destination URI (`s3a://…`, `gs://…`, `abfs://…`, or resolved `file://…`) Spine calls `FileSystem.listStatus` on that root through Spark's Hadoop layer (always, not gated on `exists`, so empty S3 buckets still exercise `ListBucket` / credentials). Failures stop the run with `HandlerError(operation="destination_preflight")` and the destination's scheme/bucket/container in `details`, so missing credentials never reach data write time.
+
+`--validate-only` runs the same code path with `write_probe=True`, additionally writing and deleting a temporary marker object under each destination to confirm write permissions. Local destinations rely on `src/loader/local_storage.py` (existence + `os.W_OK`) which already covers writability without a marker file.
+
+The preflight is the single source of truth for *can we reach this destination*. Spine does not ship per-cloud Python SDK validators; do not add `google-cloud-storage`, `azure-storage-blob`, or similar runtime checks. Extend [`src/loader/destination_preflight.py`](../../src/loader/destination_preflight.py) (or its caller in [`src/handler/dynamic_handler.py`](../../src/handler/dynamic_handler.py)) when symmetric coverage is needed for new destinations.

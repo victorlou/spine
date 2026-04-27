@@ -8,9 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import boto3
-from botocore.exceptions import ClientError
-
+from src.config.spark_runtime import resolve_spark_runtime
 from src.loader.base_loader import BaseLoader
 from src.loader.local_storage import check_local_storage_root
 from src.utils.exceptions import HandlerError, SparkError
@@ -75,53 +73,18 @@ class BaseHandler(ABC):
         """
         try:
             self.spark_manager = SparkManager()
-            self.spark = self.spark_manager.init_session()
+            destinations = {"local"}
+            resolved = None
+            if getattr(self, "settings", None) is not None:
+                destinations = self.settings.loading_destinations or {"local"}
+                resolved = resolve_spark_runtime(
+                    self.settings.pipeline_config.defaults.spark_runtime
+                )
+            self.spark = self.spark_manager.init_session(
+                destinations=destinations, spark_runtime=resolved
+            )
         except SparkError as e:
             raise HandlerError.from_error(e, "Failed to initialize Spark") from e
-
-    def _test_s3_connectivity(self, bucket: str) -> None:
-        """
-        Test S3 bucket connectivity and permissions.
-
-        Args:
-            bucket: S3 bucket name to test
-
-        Raises:
-            HandlerError: If S3 connectivity test fails
-        """
-        try:
-            s3_client = boto3.client("s3")
-
-            # Test bucket existence and permissions
-            try:
-                s3_client.head_bucket(Bucket=bucket)
-            except ClientError as e:
-                error_code = e.response.get("Error", {}).get("Code", "Unknown")
-                if error_code == "403":
-                    raise HandlerError(f"Permission denied accessing S3 bucket: {bucket}") from e
-                elif error_code == "404":
-                    raise HandlerError(f"S3 bucket does not exist: {bucket}") from e
-                else:
-                    raise HandlerError.from_error(e, f"Error accessing S3 bucket {bucket}") from e
-
-            # Test write permissions with a small test object
-            test_key = "_test_write_permission"
-            try:
-                s3_client.put_object(Bucket=bucket, Key=test_key, Body="test")
-                s3_client.delete_object(Bucket=bucket, Key=test_key)
-            except ClientError as e:
-                raise HandlerError.from_error(
-                    e,
-                    f"Failed to write test object to S3 bucket {bucket}",
-                    is_retryable=True,  # S3 write failures are often temporary
-                ) from e
-
-            self.logger.debug(f"Successfully validated S3 bucket access: {bucket}")
-
-        except Exception as e:
-            if not isinstance(e, HandlerError):
-                raise HandlerError.from_error(e, "S3 connectivity test failed") from e
-            raise
 
     def _test_local_storage_writable(self, storage_root: str) -> None:
         """

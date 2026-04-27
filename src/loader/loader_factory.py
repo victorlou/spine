@@ -5,17 +5,20 @@ Factory for creating loader instances based on configuration.
 from typing import ClassVar, Dict, Type
 
 from src.config.config_models import LoadingConfig
-from src.loader.base_loader import BaseLoader, LoaderError
-from src.loader.s3_loader import S3Loader
+from src.loader.base_loader import BaseLoader
+from src.loader.object_store_loader import ObjectStoreLoader
+from src.utils.exceptions import LoaderError
 
 
 class LoaderFactory:
     """Factory for creating loader instances."""
 
-    # Map of loader types to their implementations
+    # Canonical LoadingConfig.destination values (aliases are normalized in LoadingConfig).
     _loader_types: ClassVar[Dict[str, Type[BaseLoader]]] = {
-        "s3": S3Loader,
-        "local": S3Loader,
+        "s3": ObjectStoreLoader,
+        "gcs": ObjectStoreLoader,
+        "azure_blob": ObjectStoreLoader,
+        "local": ObjectStoreLoader,
     }
 
     @classmethod

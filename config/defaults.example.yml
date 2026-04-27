@@ -21,15 +21,39 @@ defaults:
     # Omit prefix to write under ``{source_name}/{resource_name}`` (set at runtime).
 
   # For Amazon S3 instead, use something like:
+  # (Variable names below are operator-defined examples, not Spine-reserved env vars.)
   # loading:
   #   destination: "s3"
   #   format: "delta"
   #   write_mode: "overwrite"
   #   compression: "snappy"
-  #   bucket: "${S3_INGESTION_BUCKET}"
+  #   s3_bucket: "${S3_INGESTION_BUCKET}"  # canonical
+  #   # bucket: "${S3_INGESTION_BUCKET}"   # alias
   #   prefix: "my_source/my_resource"
   #
-  # If a resource sets only bucket/prefix, set destination: "s3" on that resource (or here
+  # For GCS instead:
+  # (Use any env var name your team prefers; it only needs to match `${...}` references.)
+  # loading:
+  #   destination: "gcs"
+  #   format: "delta"
+  #   write_mode: "overwrite"
+  #   compression: "snappy"
+  #   gcs_bucket: "${GCS_INGESTION_BUCKET}"  # canonical
+  #   # bucket: "${GCS_INGESTION_BUCKET}"    # alias
+  #   prefix: "my_source/my_resource"
+  #
+  # For Azure Blob Storage (ABFS) instead:
+  # loading:
+  #   destination: "blob"  # preferred (aliases: azure, azure_blob)
+  #   format: "delta"
+  #   write_mode: "overwrite"
+  #   compression: "snappy"
+  #   azure_container: "${AZURE_CONTAINER}"  # canonical
+  #   azure_account: "${AZURE_STORAGE_ACCOUNT}"
+  #   # bucket: "${AZURE_CONTAINER}"         # alias for azure_container
+  #   prefix: "my_source/my_resource"
+  #
+  # If a resource sets only cloud bucket/container + prefix, set destination on that resource (or here
   # in defaults) so it does not inherit destination: local from defaults.
 
   context:
@@ -54,6 +78,18 @@ defaults:
     disk_config:
       path: "../.tmp/disk_streaming"
       file_size_threshold: 10000000
+
+  # Spark host profile and symmetric Hadoop cloud connector provisioning (optional; sensible defaults apply).
+  # ``profile: auto`` inspects the environment (Databricks, EMR, ECS ...) and picks local vs managed assumptions.
+  # ``s3_connector_mode`` / ``gcs_connector_mode`` / ``azure_connector_mode``: auto | packages | external
+  #   (``auto`` uses ``external`` on Databricks/EMR only; S3A endpoint region follows AWS env/credentials, not YAML).
+  # spark_runtime:
+  #   profile: "auto"
+  #   s3_connector_mode: "auto"
+  #   gcs_connector_mode: "auto"
+  #   azure_connector_mode: "auto"
+  # GCS auth defaults to APPLICATION_DEFAULT (ADC/service-account/workload identity).
+  # Set SPINE_GCS_AUTH_TYPE=COMPUTE_ENGINE only when you intentionally require metadata auth.
 
 # Named SQL files live under config/queries/ (operator-local, not committed).
 # See config/examples/sample_query.sql for a minimal template.

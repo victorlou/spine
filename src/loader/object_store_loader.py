@@ -1,5 +1,5 @@
 """
-S3 loader for uploading data to AWS S3 using Spark.
+Loader for object storage destinations (S3, GCS, Azure Blob, local) using Spark.
 """
 
 import time
@@ -13,13 +13,24 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig, LoadingFormat
+from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
 from src.loader.base_loader import BaseLoader, LoaderError
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.logger import get_logger
 
+# Common transient I/O error substrings across S3, GCS, and Azure storage drivers.
+_TRANSIENT_STORAGE_ERRORS = (
+    "Connection reset",
+    "SocketException",
+    "SocketTimeoutException",
+    "RequestTimeout",
+    "ServiceUnavailable",
+    "SlowDown",
+)
 
-def retry_on_s3_error(max_retries: int = 3, delay: float = 1.0):
-    """Simple retry decorator for S3 operations."""
+
+def retry_on_transient_storage_error(max_retries: int = 3, delay: float = 1.0):
+    """Retry decorator for transient object storage I/O errors."""
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -30,11 +41,12 @@ def retry_on_s3_error(max_retries: int = 3, delay: float = 1.0):
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exception = e
-                    if "Connection reset" in str(e) or "SocketException" in str(e):
+                    if any(pattern in str(e) for pattern in _TRANSIENT_STORAGE_ERRORS):
                         if attempt < max_retries - 1:
                             logger = get_logger(func.__name__)
                             logger.warning(
-                                f"S3 operation failed (attempt {attempt + 1}/{max_retries}). Retrying in {delay} seconds..."
+                                f"Storage operation failed (attempt {attempt + 1}/{max_retries}). "
+                                f"Retrying in {delay} seconds..."
                             )
                             time.sleep(delay)
                             continue
@@ -46,11 +58,10 @@ def retry_on_s3_error(max_retries: int = 3, delay: float = 1.0):
     return decorator
 
 
-class S3Loader(BaseLoader):
-    """Loader for object storage destinations (S3, local, …) using Spark and Hadoop FileSystem."""
+class ObjectStoreLoader(BaseLoader):
+    """Loader for object storage destinations (S3, GCS, Azure Blob, local) using Spark and Hadoop FileSystem."""
 
     def __init__(self):
-        """Initialize the S3 loader."""
         super().__init__()
         self.spark = None
         self._object_store: Optional[SparkFilesystemObjectStore] = None
@@ -73,7 +84,7 @@ class S3Loader(BaseLoader):
 
     def _format_prefix(self, prefix: Optional[str]) -> str:
         """
-        Format the S3 prefix according to the required structure.
+        Format the prefix according to the required structure.
         Ensures the prefix follows the pattern: source_name/resource_name/data
 
         Args:
@@ -85,7 +96,6 @@ class S3Loader(BaseLoader):
         if not prefix:
             return "data"
 
-        # Remove any leading/trailing slashes and ensure 'data' subdirectory
         clean_prefix = prefix.strip("/")
         return f"{clean_prefix}/data"
 
@@ -371,7 +381,7 @@ class S3Loader(BaseLoader):
         table_parts = [part for part in table_only_path.split("/") if part]
         return "iceberg." + ".".join(f"`{part}`" for part in table_parts)
 
-    @retry_on_s3_error()
+    @retry_on_transient_storage_error()
     def _write_dataframe(
         self,
         df: DataFrame,
@@ -406,6 +416,14 @@ class S3Loader(BaseLoader):
         if options_copy:
             writer = writer.options(**options_copy)
 
+        is_delta = format_type == LoadingFormat.DELTA or format_type == "delta"
+        if is_delta:
+            t0 = time.perf_counter()
+            self.logger.trace(
+                "Delta write starting",
+                extra_fields={"path": path, "iceberg_catalog": iceberg},
+            )
+
         # Iceberg catalog writes must use a catalog table identifier, not a filesystem path.
         if iceberg:
             if not iceberg_warehouse_path:
@@ -417,6 +435,17 @@ class S3Loader(BaseLoader):
             writer.saveAsTable(table_identifier)
         else:
             writer.save(path)
+
+        if is_delta:
+            elapsed = time.perf_counter() - t0
+            self.logger.debug(
+                "Delta write finished",
+                extra_fields={
+                    "path": path,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "iceberg_catalog": iceberg,
+                },
+            )
 
     def _cleanup_temp_dir(self, store: SparkFilesystemObjectStore, temp_path: str) -> None:
         """
@@ -451,7 +480,7 @@ class S3Loader(BaseLoader):
                 extra_fields={"temp_path": temp_path, "error": str(e)},
             )
 
-    @retry_on_s3_error()
+    @retry_on_transient_storage_error()
     def _move_uri(self, store: SparkFilesystemObjectStore, src_uri: str, dst_uri: str) -> None:
         """Move file from temp to final location with retry logic."""
         store.move(src_uri, dst_uri)
@@ -465,7 +494,7 @@ class S3Loader(BaseLoader):
         **kwargs,
     ) -> str:
         """
-        Load data to S3 using Spark.
+        Load data to object storage using Spark.
         Handles both Spark DataFrames and lists of dictionaries as input, converting to DataFrame if necessary.
         Supports both Delta (directory-based), Iceberg (directory-based) and Parquet (file-based) formats.
 
@@ -477,7 +506,7 @@ class S3Loader(BaseLoader):
             **kwargs: Additional arguments for specific formats
 
         Returns:
-            str: S3 path or key where data was loaded
+            str: Path or key where data was loaded
 
         Raises:
             LoaderError: If loading fails
@@ -486,11 +515,7 @@ class S3Loader(BaseLoader):
             raise LoaderError("Spark session not set. Call set_spark_session first.")
 
         try:
-            base_uri = loading_base_uri(
-                destination=config.destination,
-                bucket=config.bucket,
-                storage_root=config.storage_root,
-            )
+            base_uri = loading_base_uri(config)
         except ValueError as e:
             raise LoaderError(str(e)) from e
 
@@ -593,23 +618,25 @@ class S3Loader(BaseLoader):
             Returns False if destination is not object-store backed, format is not a
             table format, or required path fields are missing.
         """
-        if config.destination not in ("s3", "local") or config.format not in [
+        if config.destination not in OBJECT_STORE_DESTINATIONS or config.format not in [
             LoadingFormat.DELTA,
             LoadingFormat.ICEBERG,
         ]:
             return False
-        if config.destination == "s3" and (not config.bucket or not config.prefix):
+        if config.destination == "s3" and (not config.s3_bucket or not config.prefix):
             return False
         if config.destination == "local" and (not config.storage_root or not config.prefix):
+            return False
+        if config.destination == "gcs" and (not config.gcs_bucket or not config.prefix):
+            return False
+        if config.destination == "azure_blob" and (
+            not config.azure_container or not config.azure_account or not config.prefix
+        ):
             return False
         if not self.spark:
             return False
         try:
-            base_uri = loading_base_uri(
-                destination=config.destination,
-                bucket=config.bucket,
-                storage_root=config.storage_root,
-            )
+            base_uri = loading_base_uri(config)
         except ValueError:
             return False
 
@@ -1196,7 +1223,7 @@ class S3Loader(BaseLoader):
         **kwargs,
     ) -> str:
         """
-        Load data as Delta table to S3 with support for multiple save modes.
+        Load data as Delta table with support for multiple save modes.
 
         Delta tables are stored as directories, not single files. Supports three save modes:
         - **overwrite** (default): Replace all existing data in the table
@@ -1351,7 +1378,7 @@ class S3Loader(BaseLoader):
         **kwargs,
     ) -> str:
         """
-        Load data as file-based format (e.g., Parquet) to S3.
+        Load data as file-based format (e.g., Parquet) to object storage.
         Uses temporary file + move pattern for atomic writes.
 
         Args:
@@ -1361,7 +1388,7 @@ class S3Loader(BaseLoader):
             **kwargs: Additional arguments for specific formats
 
         Returns:
-            str: S3 key where data was loaded
+            str: Key where data was loaded
         """
         temp_path = None
         try:

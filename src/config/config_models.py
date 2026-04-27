@@ -15,11 +15,19 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    TypeAdapter,
     ValidationInfo,
     field_validator,
     model_validator,
 )
 
+from src.config.loading_schema import (
+    OBJECT_STORE_DESTINATIONS,
+    normalize_azure_account_label,
+    normalize_azure_container_label,
+    normalize_loading_destination,
+    normalize_object_store_bucket_label,
+)
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicOrStaticValue,
@@ -50,11 +58,18 @@ class LoadingFormat(str, Enum):
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
-    For S3 and local destinations, prefix should follow ``source_name/resource_name``
+    For object storage destinations, prefix should follow ``source_name/resource_name``
     (e.g. ``my_source/users``). When prefix is omitted, the handler fills it from the
     source and resource name at runtime.
 
-    For S3, the actual Parquet data will be stored in a 'data' subdirectory under this prefix.
+    For file-based formats (Parquet), the actual data will be stored in a 'data'
+    subdirectory under this prefix.
+
+    Supported destinations and required fields:
+    - ``s3``    → requires ``s3_bucket`` (or alias ``bucket``)
+    - ``local`` → requires ``storage_root``
+    - ``gcs``   → requires ``gcs_bucket`` (or alias ``bucket``)
+    - ``azure_blob`` (aliases: ``blob``, ``azure``) → requires ``azure_container`` (or alias ``bucket``) and ``azure_account``
 
     Save modes for Delta format:
     - **overwrite** (default): Replace all existing data in the table
@@ -77,8 +92,7 @@ class LoadingConfig(BaseModel):
     format: LoadingFormat = LoadingFormat.DELTA
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
     compression: Optional[str] = "snappy"
-    bucket: Optional[str] = None  # For S3, can be inherited from defaults
-    prefix: Optional[str] = None  # For S3/local, required for those destinations
+    prefix: Optional[str] = None  # For all object store destinations; required at runtime
     storage_root: Optional[str] = Field(
         default=None,
         description=(
@@ -86,6 +100,23 @@ class LoadingConfig(BaseModel):
             "May be relative to the repository root (directory containing ``src/``); "
             "ConfigLoader resolves it before validation."
         ),
+    )
+    bucket: Optional[str] = None  # Generic alias bucket/container name
+    s3_bucket: Optional[str] = Field(
+        default=None,
+        description="Canonical S3 bucket name for destination: s3 (Spark s3a://).",
+    )
+    gcs_bucket: Optional[str] = Field(
+        default=None,
+        description="GCS bucket name for destination: gcs (Spark gs://).",
+    )
+    azure_container: Optional[str] = Field(
+        default=None,
+        description="Azure Blob Storage container name for destination: azure_blob (Spark abfs://).",
+    )
+    azure_account: Optional[str] = Field(
+        default=None,
+        description="Azure storage account name for destination: azure_blob (Spark abfs://).",
     )
     merge_keys: Optional[List[str]] = Field(
         default=None,
@@ -96,14 +127,74 @@ class LoadingConfig(BaseModel):
         description="Enable deduplication during merge operations using merge_keys as the matching criteria. When True, duplicate records matching the merge key are deduplicated with non-deterministic row selection. When False, all records are preserved without deduplication.",
     )
 
+    @model_validator(mode="after")
+    def normalize_destination_alias_fields(self) -> "LoadingConfig":
+        """Normalize generic/provider aliases and reject conflicting values."""
+        if not self.enabled:
+            return self
+
+        if self.destination == "s3":
+            if self.bucket and self.s3_bucket and self.bucket != self.s3_bucket:
+                raise ValueError("bucket and s3_bucket cannot both be set with different values")
+            effective = self.s3_bucket or self.bucket
+            object.__setattr__(self, "s3_bucket", effective)
+            object.__setattr__(self, "bucket", effective)
+
+        elif self.destination == "gcs":
+            if self.bucket and self.gcs_bucket and self.bucket != self.gcs_bucket:
+                raise ValueError("bucket and gcs_bucket cannot both be set with different values")
+            effective = self.gcs_bucket or self.bucket
+            object.__setattr__(self, "gcs_bucket", effective)
+            object.__setattr__(self, "bucket", effective)
+
+        elif self.destination == "azure_blob":
+            if self.bucket and self.azure_container and self.bucket != self.azure_container:
+                raise ValueError(
+                    "bucket and azure_container cannot both be set with different values"
+                )
+            effective = self.azure_container or self.bucket
+            object.__setattr__(self, "azure_container", effective)
+            object.__setattr__(self, "bucket", effective)
+
+        return self
+
+    @model_validator(mode="after")
+    def normalize_object_store_identity_fields(self) -> "LoadingConfig":
+        """Normalize bucket/container/account/storage labels at validation time."""
+        dest = self.destination
+        if dest == "s3":
+            nb = normalize_object_store_bucket_label(self.s3_bucket)
+            object.__setattr__(self, "s3_bucket", nb)
+            object.__setattr__(self, "bucket", nb)
+        elif dest == "gcs":
+            nb = normalize_object_store_bucket_label(self.gcs_bucket)
+            object.__setattr__(self, "gcs_bucket", nb)
+            object.__setattr__(self, "bucket", nb)
+        elif dest == "azure_blob":
+            nc = normalize_azure_container_label(self.azure_container)
+            na = normalize_azure_account_label(self.azure_account)
+            object.__setattr__(self, "azure_container", nc)
+            object.__setattr__(self, "bucket", nc)
+            object.__setattr__(self, "azure_account", na)
+        elif dest == "local" and self.storage_root is not None:
+            object.__setattr__(self, "storage_root", str(self.storage_root).strip())
+        return self
+
+    @field_validator("destination")
+    @classmethod
+    def normalize_destination_aliases(cls, v: str) -> str:
+        """Normalize destination aliases to canonical destination identifiers."""
+        return normalize_loading_destination(v)
+
     @field_validator("prefix")
     @classmethod
     def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate prefix format for S3 and local filesystem destinations."""
+        """Validate prefix format for object storage destinations."""
         if not info.data.get("enabled", True):
             return v
+        # ``destination`` is validated before ``prefix``; aliases are already normalized.
         dest = info.data.get("destination")
-        if dest in ("s3", "local"):
+        if dest is not None and dest in OBJECT_STORE_DESTINATIONS:
             if v is None or not str(v).strip():
                 return None
 
@@ -152,15 +243,30 @@ class LoadingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_destination_storage_fields(self) -> "LoadingConfig":
-        """Require bucket (S3) or storage_root (local); runs after merge_keys check."""
+        """Require the appropriate storage fields for each object store destination."""
         if not self.enabled:
             return self
+        if self.destination not in OBJECT_STORE_DESTINATIONS:
+            valid = ", ".join(sorted(OBJECT_STORE_DESTINATIONS))
+            raise ValueError(
+                f"Unsupported loading destination '{self.destination}'. Valid destinations: {valid}"
+            )
         if self.destination == "s3":
-            if not self.bucket:
-                raise ValueError("bucket is required for S3 destination")
+            if not self.s3_bucket:
+                raise ValueError("s3_bucket (or bucket alias) is required for S3 destination")
         elif self.destination == "local":
             if not self.storage_root:
                 raise ValueError("storage_root is required for local destination")
+        elif self.destination == "gcs":
+            if not self.gcs_bucket:
+                raise ValueError("gcs_bucket (or bucket alias) is required for GCS destination")
+        elif self.destination == "azure_blob":
+            if not self.azure_container:
+                raise ValueError(
+                    "azure_container (or bucket alias) is required for Azure destination"
+                )
+            if not self.azure_account:
+                raise ValueError("azure_account is required for Azure destination")
         return self
 
     model_config = {"validate_assignment": True}
@@ -378,7 +484,7 @@ class InputConfig(BaseModel):
         input_format: How the parameter value should be interpreted
             - "single": Treat value as a single item
             - "array": Treat value as a list of items
-        request_format: How to format the value(s) in the API request (can be string or RequestFormatConfig)
+        request_format: How to format the value(s) in the API request (``RequestFormatConfig``; shorthand strings are normalized at validation)
         batch_size: Optional batch size for processing. Static lists are automatically batched.
         pagination: Optional pagination configuration (typically used for page parameters)
 
@@ -396,8 +502,9 @@ class InputConfig(BaseModel):
 
     value: DynamicOrStaticValue  # Static or dynamic value
     input_format: Literal["single", "array"] = "single"  # Format of the input parameter
-    request_format: Union[RequestFormatType, RequestFormatConfig, None] = (
-        None  # for backwards compatibility
+    request_format: Optional[RequestFormatConfig] = Field(
+        default=None,
+        description="Request formatting; use ``{type: string}`` or shorthand ``string`` at YAML load time.",
     )
     batch_size: Optional[Union[int, BatchSizeMode]] = (
         None  # Batch size for processing. Use BatchSizeMode.ALL to process all items in a single batch.
@@ -410,6 +517,30 @@ class InputConfig(BaseModel):
         default=None,
         description="Pagination configuration for this parameter (typically used for page parameters)",
     )
+
+    @field_validator("request_format", mode="before")
+    @classmethod
+    def normalize_request_format(cls, v: Any) -> Optional[RequestFormatConfig]:
+        """Accept ``RequestFormatConfig``, a format name string, or a dict from YAML."""
+        if v is None:
+            return None
+        if isinstance(v, RequestFormatConfig):
+            return v
+        if isinstance(v, RequestFormatType):
+            return RequestFormatConfig(type=v)
+        if isinstance(v, str):
+            try:
+                return RequestFormatConfig(type=RequestFormatType(v))
+            except ValueError as e:
+                allowed = ", ".join(repr(t.value) for t in RequestFormatType)
+                raise ValueError(
+                    f"request_format string must be one of [{allowed}], got {v!r}"
+                ) from e
+        if isinstance(v, dict):
+            return RequestFormatConfig.model_validate(v)
+        raise TypeError(
+            f"request_format must be null, str, dict, or RequestFormatConfig, got {type(v).__name__}"
+        )
 
     @model_validator(mode="after")
     def extract_pagination_from_value(self):
@@ -444,7 +575,6 @@ class InputConfig(BaseModel):
         # If preprocessing is configured, the perceived value will be a list (regardless of the input type of the value) and after applying preprocessing steps
         if (
             self.request_format
-            and isinstance(self.request_format, RequestFormatConfig)
             and self.request_format.preprocess
             and isinstance(value, (str, int, float, list))
         ):
@@ -462,15 +592,7 @@ class InputConfig(BaseModel):
 
             value = processed_value
 
-        # Now apply request_format conversion
-        # Handle how the value could be a list or a single value
-        # Normalize request_format to RequestFormatConfig
         format_config = self.request_format
-        if isinstance(format_config, str):
-            # Backwards compatibility: convert string to RequestFormatConfig
-            # Cast to the appropriate literal type
-            format_config = RequestFormatConfig(type=format_config)  # type: ignore[arg-type]
-
         if not format_config:
             return value
 
@@ -1046,26 +1168,6 @@ class ResourceConfig(BaseModel):
 
         super().__init__(**data)
 
-        # Validate loading destination fields (only if loading is configured and enabled)
-        if (
-            self.loading
-            and self.loading.enabled
-            and self.loading.destination == "s3"
-            and not self.loading.bucket
-        ):
-            raise ValueError(
-                "bucket is required for S3 destination (either in defaults or resource configuration)"
-            )
-        if (
-            self.loading
-            and self.loading.enabled
-            and self.loading.destination == "local"
-            and not self.loading.storage_root
-        ):
-            raise ValueError(
-                "storage_root is required for local destination (either in defaults or resource configuration)"
-            )
-
 
 class SourceType(StrEnum):
     """Built-in pipeline source kinds (YAML `type` field). Extend when adding new service types."""
@@ -1117,6 +1219,19 @@ class SourceConfig(BaseModel):
         default=None,
         description="Extra JDBC properties or URL query parameters (driver-specific).",
     )
+
+    @model_validator(mode="after")
+    def normalize_rest_base_url(self) -> "SourceConfig":
+        """Strip trailing slashes from REST base URLs so path joins stay consistent."""
+        if self.base_url is not None:
+            normalized = str(self.base_url).rstrip("/")
+            if normalized != str(self.base_url):
+                object.__setattr__(
+                    self,
+                    "base_url",
+                    TypeAdapter(HttpUrl).validate_python(normalized),
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_source_type(self):
@@ -1256,6 +1371,62 @@ class StreamingConfig(BaseModel):
     )
 
 
+class SparkRuntimeProfile(StrEnum):
+    """
+    How Spine treats the Spark host for profile selection when ``profile`` is ``auto``.
+
+    ``local_dev`` forces local-style defaults; ``cluster_managed`` forces managed-cluster defaults.
+    """
+
+    AUTO = "auto"
+    LOCAL_DEV = "local_dev"
+    CLUSTER_MANAGED = "cluster_managed"
+
+
+class ConnectorProvisionMode(StrEnum):
+    """Whether Ivy ``--packages`` should pull Hadoop cloud connectors or the cluster supplies them."""
+
+    AUTO = "auto"
+    PACKAGES = "packages"
+    EXTERNAL = "external"
+
+
+class SparkRuntimeConfig(BaseModel):
+    """
+    Defaults for Spark session bootstrap: host profile and symmetric Hadoop connector provisioning.
+
+    Per-destination ``*_connector_mode`` controls whether Ivy pulls artifacts or the cluster
+    already provides them. Environment variables (for example ``SPARK_S3_CONNECTOR_MODE``) still
+    override YAML when set so CI and bespoke images can force behavior without editing pipeline files.
+
+    S3A endpoint region is not configured here; it follows the AWS credential chain, ``AWS_REGION`` /
+    ``AWS_DEFAULT_REGION``, and SparkManager when ``s3`` is a destination (see deployment docs).
+    """
+
+    profile: SparkRuntimeProfile = Field(
+        default=SparkRuntimeProfile.AUTO,
+        description=(
+            "``auto`` inspects the process environment (Databricks, EMR, ECS, Kubernetes) and "
+            "chooses between local and managed assumptions; set explicitly when detection is wrong."
+        ),
+    )
+    s3_connector_mode: ConnectorProvisionMode = Field(
+        default=ConnectorProvisionMode.AUTO,
+        description=(
+            "S3A / ``hadoop-aws``: ``auto`` uses the same Databricks/EMR ``external`` default as GCS and Azure; "
+            "else ``packages``."
+        ),
+    )
+    gcs_connector_mode: ConnectorProvisionMode = Field(
+        default=ConnectorProvisionMode.AUTO,
+        description="GCS Hadoop connector: ``auto`` uses Databricks/EMR ``external`` defaults; else ``packages``.",
+    )
+    azure_connector_mode: ConnectorProvisionMode = Field(
+        default=ConnectorProvisionMode.AUTO,
+        description="ABFS connector: same semantics as ``gcs_connector_mode``.",
+    )
+
+
 class DefaultsConfig(BaseModel):
     """Default configuration values. See ``config/defaults.example.yml`` for a full operator template."""
 
@@ -1283,7 +1454,7 @@ class DefaultsConfig(BaseModel):
         description=(
             "Default loading merged into every resource unless the resource sets loading.enabled "
             "to false. Prefix may be omitted; the handler sets ``{source_name}/{resource_name}`` "
-            "before load when prefix is unset for local or S3 destinations."
+            "before load when prefix is unset for object-store destinations (local, s3, gcs, azure_blob)."
         ),
     )
     context: ContextConfig = Field(
@@ -1292,6 +1463,10 @@ class DefaultsConfig(BaseModel):
     streaming: StreamingConfig = Field(
         default_factory=StreamingConfig,
         description="Streaming configuration for memory-efficient processing",
+    )
+    spark_runtime: SparkRuntimeConfig = Field(
+        default_factory=SparkRuntimeConfig,
+        description="Spark host profile and per-cloud connector provisioning (see docs/configuration/loading.md).",
     )
 
 
@@ -1362,6 +1537,24 @@ class PipelineConfig(BaseModel):
 
         with open(query_file_path, "r") as file:
             return file.read()
+
+    def get_effective_loading_destinations(self) -> set[str]:
+        """
+        Return the set of enabled loading destinations used by enabled resources.
+
+        Resource loading is already merged with defaults in model initialization, so this
+        method reflects effective destination usage for the current selection scope.
+        """
+        destinations: set[str] = set()
+        for source in self.sources.values():
+            if not source.enabled:
+                continue
+            for resource in source.resources.values():
+                if not resource.enabled or resource.loading is None:
+                    continue
+                if resource.loading.enabled:
+                    destinations.add(resource.loading.destination)
+        return destinations
 
 
 class FieldConfig:

@@ -26,6 +26,7 @@ from src.utils.data_utils import dict_response_key_to_records
 from src.utils.dynamic_values import get_resolver, resolve_headers_dict, resolve_request_body
 from src.utils.logger import REDACTED_PLACEHOLDER, get_logger, redact_text
 from src.utils.redis_context import RedisContextManager
+from src.utils.url_join import join_http_base_and_path
 
 
 class RestService(BaseSourceService):
@@ -876,7 +877,7 @@ class RestService(BaseSourceService):
         if path_params:
             path = self._substitute_path_parameters(path, path_params)
 
-        url = f"{str(self.config.base_url).rstrip('/')}/{path.lstrip('/')}"
+        url = join_http_base_and_path(str(self.config.base_url), path)
         return resource, url, params_for_request
 
     def fetch_data(

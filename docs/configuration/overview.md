@@ -69,7 +69,7 @@ sources:
 |-------|-------------|
 | [Request inputs](parameters.md) | Request inputs (path/query/body), static/dynamic, SOURCE, DATABRICKS, DATE, batching, formats, shorthand, headers, POST body |
 | [Backfill](backfill.md) | Date-range backfill for path, query, or body request inputs |
-| [Loading](loading.md) | Delta save modes (overwrite, append, merge), S3, local |
+| [Loading](loading.md) | Delta save modes (overwrite, append, merge), destination options (`local`, `s3`, `gcs`, `azure_blob`) and field aliases |
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |
 | **PostgreSQL / HANA** | `type: postgresql` or `type: hana` with JDBC-style connection fields. PostgreSQL requires `database`. For HANA, `database` is the optional **tenant database name** sent as the JDBC `databaseName` parameter (must match a real tenant when your SQL port is shared). Omit it when `host:port` already targets a single tenant. Runtime images need the SAP **ngdbc** JAR on the Spark classpath (Spine adds `com.sap.cloud.db.jdbc:ngdbc` via `spark.jars.packages`). See [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml). |
@@ -87,7 +87,7 @@ Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block 
 
 ### Default loading and row counts
 
-- **`defaults.loading`** is merged into every resource that does not define its own `loading` block (and `loading: null` in YAML is treated the same as omitted: inherit defaults). For **`local`** and **`s3`** destinations, if **`prefix`** is omitted, the handler sets **`{source_name}/{resource_name}`** before writing.
+- **`defaults.loading`** is merged into every resource that does not define its own `loading` block (and `loading: null` in YAML is treated the same as omitted: inherit defaults). For object-store destinations (**`local`**, **`s3`**, **`gcs`**, **`azure_blob`**), if **`prefix`** is omitted, the handler sets **`{source_name}/{resource_name}`** before writing.
 - **`loading.enabled`**: after merging defaults, set **`enabled: false`** on a resource to skip loader writes for that resource only.
 - **`defaults.log_full_row_count`**: when **`true`**, the handler runs a full Spark **`df.count()`** for result summaries and enables the same global behavior for database extracts unless a resource opts in with **`table_read_options.log_exact_row_count`**. When **`false`** (default), the handler uses a lightweight non-empty check instead of a full count, and database extracts skip **`df.count()`** unless **`table_read_options.log_exact_row_count`** is **`true`** for that resource.
 

@@ -5,38 +5,173 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.config.config_models import LoadingConfig, LoadingFormat
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.exceptions import LoaderError
 
 
 def test_loading_base_uri_s3() -> None:
-    assert loading_base_uri(destination="s3", bucket="my-bucket") == "s3a://my-bucket"
+    cfg = LoadingConfig(
+        destination="s3",
+        s3_bucket="my-bucket",
+        prefix="a/b",
+        format="delta",
+    )
+    assert loading_base_uri(cfg) == "s3a://my-bucket"
 
 
-def test_loading_base_uri_s3_strips_whitespace() -> None:
-    assert loading_base_uri(destination="s3", bucket="  my-bucket  ") == "s3a://my-bucket"
+def test_loading_base_uri_s3_identity_from_validated_config() -> None:
+    """Whitespace/slash trimming happens in LoadingConfig validation, not in loading_base_uri."""
+    cfg = LoadingConfig(
+        destination="s3",
+        s3_bucket="  my-bucket  ",
+        prefix="a/b",
+        format="delta",
+    )
+    assert loading_base_uri(cfg) == "s3a://my-bucket"
 
 
-def test_loading_base_uri_s3_missing_bucket() -> None:
-    with pytest.raises(ValueError, match="bucket is required"):
-        loading_base_uri(destination="s3", bucket=None)
+def test_loading_base_uri_s3_missing_bucket_model_construct() -> None:
+    """Guard when config bypasses validation (e.g. model_construct)."""
+    cfg = LoadingConfig.model_construct(
+        destination="s3",
+        format=LoadingFormat.DELTA,
+        enabled=True,
+        s3_bucket=None,
+        gcs_bucket=None,
+        bucket=None,
+        azure_container=None,
+        azure_account=None,
+        storage_root=None,
+        prefix="a/b",
+    )
+    with pytest.raises(ValueError, match="s3_bucket is required"):
+        loading_base_uri(cfg)
 
 
 def test_loading_base_uri_local(tmp_path: Path) -> None:
     root = tmp_path / "out"
     root.mkdir()
-    uri = loading_base_uri(destination="local", storage_root=str(root))
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root=str(root),
+        prefix="a/b",
+        format="delta",
+    )
+    uri = loading_base_uri(cfg)
     assert uri == root.resolve().as_uri().rstrip("/")
 
 
-def test_loading_base_uri_local_missing_root() -> None:
+def test_loading_base_uri_local_missing_root_model_construct() -> None:
+    cfg = LoadingConfig.model_construct(
+        destination="local",
+        format=LoadingFormat.DELTA,
+        enabled=True,
+        storage_root=None,
+        prefix="a/b",
+    )
     with pytest.raises(ValueError, match="storage_root is required"):
-        loading_base_uri(destination="local", storage_root=None)
+        loading_base_uri(cfg)
+
+
+def test_loading_base_uri_gcs() -> None:
+    cfg = LoadingConfig(
+        destination="gcs",
+        gcs_bucket="my-gcs-bucket",
+        prefix="a/b",
+        format="delta",
+    )
+    assert loading_base_uri(cfg) == "gs://my-gcs-bucket"
+
+
+def test_loading_base_uri_gcs_missing_bucket_model_construct() -> None:
+    cfg = LoadingConfig.model_construct(
+        destination="gcs",
+        format=LoadingFormat.DELTA,
+        enabled=True,
+        gcs_bucket=None,
+        s3_bucket=None,
+        bucket=None,
+        prefix="a/b",
+    )
+    with pytest.raises(ValueError, match="gcs_bucket is required"):
+        loading_base_uri(cfg)
+
+
+def test_loading_base_uri_azure() -> None:
+    cfg = LoadingConfig(
+        destination="azure_blob",
+        azure_container="mycontainer",
+        azure_account="myaccount",
+        prefix="a/b",
+        format="delta",
+    )
+    uri = loading_base_uri(cfg)
+    assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
+
+
+def test_loading_base_uri_blob_destination_alias() -> None:
+    cfg = LoadingConfig(
+        destination="blob",
+        bucket="mycontainer",
+        azure_account="myaccount",
+        prefix="a/b",
+        format="delta",
+    )
+    assert cfg.destination == "azure_blob"
+    uri = loading_base_uri(cfg)
+    assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
+
+
+def test_loading_base_uri_azure_destination_alias() -> None:
+    cfg = LoadingConfig(
+        destination="azure",
+        bucket="mycontainer",
+        azure_account="myaccount",
+        prefix="a/b",
+        format="delta",
+    )
+    assert cfg.destination == "azure_blob"
+    uri = loading_base_uri(cfg)
+    assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
+
+
+def test_loading_base_uri_azure_missing_container_model_construct() -> None:
+    cfg = LoadingConfig.model_construct(
+        destination="azure_blob",
+        format=LoadingFormat.DELTA,
+        enabled=True,
+        azure_container=None,
+        azure_account="myaccount",
+        bucket=None,
+        prefix="a/b",
+    )
+    with pytest.raises(ValueError, match="azure_container is required"):
+        loading_base_uri(cfg)
+
+
+def test_loading_base_uri_azure_missing_account_model_construct() -> None:
+    cfg = LoadingConfig.model_construct(
+        destination="azure_blob",
+        format=LoadingFormat.DELTA,
+        enabled=True,
+        azure_container="mycontainer",
+        azure_account=None,
+        bucket=None,
+        prefix="a/b",
+    )
+    with pytest.raises(ValueError, match="azure_account is required"):
+        loading_base_uri(cfg)
 
 
 def test_loading_base_uri_unknown_destination() -> None:
+    cfg = LoadingConfig.model_construct(
+        destination="sftp",
+        format=LoadingFormat.DELTA,
+        enabled=True,
+    )
     with pytest.raises(ValueError, match="Unsupported"):
-        loading_base_uri(destination="azure", bucket="x")
+        loading_base_uri(cfg)
 
 
 @pytest.fixture

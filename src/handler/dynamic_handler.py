@@ -2559,6 +2559,13 @@ class DynamicHandler(BaseHandler):
                         s_bucket = os.getenv("S3_CONTROL_BUCKET")
                         if s_bucket:
                             audit_recorder.flush(self.spark, s_bucket, filesystem_scheme="s3a")
+                            flushed = True
+                    if not flushed and "azure_blob" in destinations:
+                        azure_container = (os.getenv("AZURE_CONTROL_CONTAINER") or "").strip()
+                        azure_account = (os.getenv("AZURE_CONTROL_ACCOUNT") or "").strip()
+                        if azure_container and azure_account:
+                            authority = f"{azure_container}@{azure_account}.dfs.core.windows.net"
+                            audit_recorder.flush(self.spark, authority, filesystem_scheme="abfs")
             except KeyboardInterrupt:
                 self.logger.warning("Audit flush interrupted")
                 raise

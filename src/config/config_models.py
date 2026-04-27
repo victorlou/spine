@@ -246,6 +246,11 @@ class LoadingConfig(BaseModel):
         """Require the appropriate storage fields for each object store destination."""
         if not self.enabled:
             return self
+        if self.destination not in OBJECT_STORE_DESTINATIONS:
+            valid = ", ".join(sorted(OBJECT_STORE_DESTINATIONS))
+            raise ValueError(
+                f"Unsupported loading destination '{self.destination}'. Valid destinations: {valid}"
+            )
         if self.destination == "s3":
             if not self.s3_bucket:
                 raise ValueError("s3_bucket (or bucket alias) is required for S3 destination")

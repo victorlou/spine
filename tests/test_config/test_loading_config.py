@@ -202,6 +202,15 @@ def test_loading_config_disabled_skips_bucket_and_prefix_rules() -> None:
     assert cfg.enabled is False
 
 
+def test_loading_config_rejects_unknown_destination() -> None:
+    with pytest.raises(ValidationError, match="Unsupported loading destination"):
+        LoadingConfig(
+            destination="sftp",
+            format="delta",
+            enabled=True,
+        )
+
+
 def test_rest_source_config_strips_trailing_slash_from_base_url() -> None:
     src = SourceConfig(
         enabled=True,

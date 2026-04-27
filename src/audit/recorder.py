@@ -116,8 +116,11 @@ class AuditRecorder:
 
         Args:
             spark: SparkSession (from SparkManager)
-            bucket: Object store bucket name (no scheme) for audit tables
-            filesystem_scheme: ``s3a`` for AWS S3, ``gs`` for Google Cloud Storage
+            bucket: Storage authority used by ``filesystem_scheme`` for audit tables
+                (e.g. ``my-bucket`` for ``s3a``/``gs``, or
+                ``container@account.dfs.core.windows.net`` for ``abfs``)
+            filesystem_scheme: ``s3a`` for AWS S3, ``gs`` for Google Cloud Storage,
+                or ``abfs`` for Azure Blob/ADLS Gen2
         """
         if not bucket or not spark:
             if self._requests or self._responses:

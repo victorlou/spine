@@ -48,6 +48,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - Avoid hidden coupling across modules. If a change affects planning, config, and runtime behavior, update all three deliberately.
 - Be skeptical of convenience shortcuts that weaken validation, observability, or repeatability.
 - Prefer the smallest change that keeps the design clean. Avoid introducing new abstractions, flags, or special cases unless they clearly earn their keep.
+- Shared baseline test isolation for managed Spark platform env signals lives in `tests/conftest.py`: use `clear_managed_platform_env` and `MANAGED_PLATFORM_ENV_KEYS` instead of copying the env-var tuple into individual modules.
 - **No issue or PR references in implementation code** — Do not put GitHub issue numbers, pull request numbers, or links in source comments, docstrings, or user-facing error messages. Traceability belongs in commit messages and PR descriptions (see **GitHub issues** below). Describe behavior objectively so docs and errors stay accurate as new source types are added (avoid hardcoding today's short list of database or API names unless the text is truly specific to one integration).
 
 ## Docs Expectations

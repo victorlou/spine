@@ -13,27 +13,17 @@ from src.config.config_models import LoadingConfig
 from src.loader import destination_preflight
 from src.loader.destination_preflight import preflight_destinations
 from src.utils.exceptions import HandlerError
+from tests.conftest import clear_managed_platform_env
 
 _MINIMAL_ADC_JSON = (
     '{"type":"authorized_user","client_id":"cid","client_secret":"x","refresh_token":"rt"}'
 )
 
 
-def _clear_managed_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in (
-        "DATABRICKS_RUNTIME_VERSION",
-        "EMR_STEP_ID",
-        "EMR_CLUSTER_ID",
-        "ECS_CONTAINER_METADATA_URI",
-        "KUBERNETES_SERVICE_HOST",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
-
 def _install_minimal_gcs_adc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Deterministic workstation ADC so GCS preflight reaches the JVM stub in CI."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    _clear_managed_platform_env(monkeypatch)
+    clear_managed_platform_env(monkeypatch)
     adc_dir = tmp_path / ".config" / "gcloud"
     adc_dir.mkdir(parents=True)
     (adc_dir / "application_default_credentials.json").write_text(
@@ -260,14 +250,7 @@ def test_preflight_gcs_fails_fast_without_adc_on_workstation(
     """Regression: avoid long JVM hangs when only `gcloud auth login` was run, not ADC."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    for key in (
-        "DATABRICKS_RUNTIME_VERSION",
-        "EMR_STEP_ID",
-        "EMR_CLUSTER_ID",
-        "ECS_CONTAINER_METADATA_URI",
-        "KUBERNETES_SERVICE_HOST",
-    ):
-        monkeypatch.delenv(key, raising=False)
+    clear_managed_platform_env(monkeypatch)
 
     spark = MagicMock(name="unused_spark")
     config = LoadingConfig(destination="gcs", gcs_bucket="test-bucket-dinho")
@@ -312,7 +295,7 @@ def test_preflight_gcs_rejects_malformed_adc_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    _clear_managed_platform_env(monkeypatch)
+    clear_managed_platform_env(monkeypatch)
     adc_dir = tmp_path / ".config" / "gcloud"
     adc_dir.mkdir(parents=True)
     (adc_dir / "application_default_credentials.json").write_text("{not json", encoding="utf-8")
@@ -330,7 +313,7 @@ def test_preflight_gcs_accepts_minimal_json_object_for_adc_precheck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    _clear_managed_platform_env(monkeypatch)
+    clear_managed_platform_env(monkeypatch)
     adc_dir = tmp_path / ".config" / "gcloud"
     adc_dir.mkdir(parents=True)
     (adc_dir / "application_default_credentials.json").write_text(
@@ -347,7 +330,7 @@ def test_preflight_gcs_accepts_minimal_json_object_for_adc_precheck(
 def test_preflight_gcs_rejects_malformed_gac_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _clear_managed_platform_env(monkeypatch)
+    clear_managed_platform_env(monkeypatch)
     bad = tmp_path / "bad.json"
     bad.write_text("{", encoding="utf-8")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(bad))
@@ -367,14 +350,7 @@ def test_preflight_gcs_precheck_errors_when_gac_points_to_missing_file(
     monkeypatch.setenv("HOME", str(tmp_path))
     missing = tmp_path / "nope.json"
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(missing))
-    for key in (
-        "DATABRICKS_RUNTIME_VERSION",
-        "EMR_STEP_ID",
-        "EMR_CLUSTER_ID",
-        "ECS_CONTAINER_METADATA_URI",
-        "KUBERNETES_SERVICE_HOST",
-    ):
-        monkeypatch.delenv(key, raising=False)
+    clear_managed_platform_env(monkeypatch)
 
     spark = MagicMock()
     config = LoadingConfig(destination="gcs", gcs_bucket="my-bucket")
@@ -389,7 +365,7 @@ def test_preflight_gcs_compute_engine_auth_fails_fast_off_gcp(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     monkeypatch.setenv("SPINE_GCS_AUTH_TYPE", "COMPUTE_ENGINE")
-    _clear_managed_platform_env(monkeypatch)
+    clear_managed_platform_env(monkeypatch)
 
     spark = MagicMock()
     config = LoadingConfig(destination="gcs", gcs_bucket="my-bucket")

@@ -76,10 +76,17 @@ ruff check --fix src/ tests/
 ## Testing
 
 ```bash
-pytest
+uv run pytest
 ```
 
-(Or `uv run pytest` without activating the venv.)
+Coverage (same baseline gate used in CI):
+
+```bash
+uv run pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-fail-under=38
+```
+
+The team target remains 85% line coverage on `src/`; the current gate is a ratchet floor so
+coverage regressions are blocked while tests are expanded intentionally.
 
 ## Debugging
 

@@ -60,3 +60,10 @@ markers = [
     "integration: optional tests that hit external systems or credentials",
     "slow: unusually slow tests",
 ]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

@@ -119,5 +119,5 @@ With `.venv` activated after `uv sync --all-groups` (see **Run locally** under C
 ### Add a new destination
 
 1. Create loader class in `src/loader/` (inherit from `BaseLoader`)
-2. Register in `src/loader/loader_factory.py`
+2. Add the destination to `OBJECT_STORE_DESTINATIONS` in `src/config/loading_schema.py`.
 3. Update configuration models for the new destination type

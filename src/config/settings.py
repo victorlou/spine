@@ -58,6 +58,22 @@ class APISettings(BaseSettings):
         default=1.0, description="Initial delay between retries in seconds"
     )
     RETRY_BACKOFF: float = Field(default=2.0, description="Multiplicative factor for retry delay")
+    HONOR_RETRY_AFTER_HEADER: bool = Field(
+        default=True,
+        description="Honor Retry-After on urllib3 transport retries (429/503/413).",
+    )
+    MAX_RETRY_AFTER_SECONDS: int = Field(
+        default=21600,
+        description="Upper bound for parsed Retry-After header (seconds).",
+    )
+    MAX_BACKOFF_SECONDS: float = Field(
+        default=120.0,
+        description="Maximum exponential backoff sleep between transport retries (seconds).",
+    )
+    BACKOFF_JITTER_SECONDS: float = Field(
+        default=0.0,
+        description="Maximum random extra seconds on exponential backoff (urllib3 backoff_jitter).",
+    )
 
     def update_from_config(self, config: PipelineConfig) -> None:
         """
@@ -67,9 +83,14 @@ class APISettings(BaseSettings):
             config: Pipeline configuration containing retry settings
         """
         if config.defaults and config.defaults.retry:
-            self.MAX_RETRIES = config.defaults.retry.max_attempts
-            self.INITIAL_DELAY = config.defaults.retry.initial_delay
-            self.RETRY_BACKOFF = config.defaults.retry.backoff_factor
+            r = config.defaults.retry
+            self.MAX_RETRIES = r.max_attempts
+            self.INITIAL_DELAY = r.initial_delay
+            self.RETRY_BACKOFF = r.backoff_factor
+            self.HONOR_RETRY_AFTER_HEADER = r.honor_retry_after_header
+            self.MAX_RETRY_AFTER_SECONDS = r.max_retry_after_seconds
+            self.MAX_BACKOFF_SECONDS = r.max_backoff_seconds
+            self.BACKOFF_JITTER_SECONDS = r.backoff_jitter_seconds
 
 
 class DatabricksSettings(BaseSettings):

@@ -38,6 +38,11 @@ defaults:
     max_attempts: 3
     initial_delay: 1
     backoff_factor: 2
+    # HTTP client (urllib3): Retry-After on 429/503/413, capped by max_retry_after_seconds.
+    honor_retry_after_header: true
+    max_retry_after_seconds: 21600
+    max_backoff_seconds: 120
+    backoff_jitter_seconds: 0
   loading:
     destination: "s3"
     format: "delta"
@@ -90,6 +95,12 @@ Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block 
 - **`defaults.loading`** is merged into every resource that does not define its own `loading` block (and `loading: null` in YAML is treated the same as omitted: inherit defaults). For object-store destinations (**`local`**, **`s3`**, **`gcs`**, **`azure_blob`**), if **`prefix`** is omitted, the handler sets **`{source_name}/{resource_name}`** before writing.
 - **`loading.enabled`**: after merging defaults, set **`enabled: false`** on a resource to skip loader writes for that resource only.
 - **`defaults.log_full_row_count`**: when **`true`**, the handler runs a full Spark **`df.count()`** for result summaries and enables the same global behavior for database extracts unless a resource opts in with **`table_read_options.log_exact_row_count`**. When **`false`** (default), the handler uses a lightweight non-empty check instead of a full count, and database extracts skip **`df.count()`** unless **`table_read_options.log_exact_row_count`** is **`true`** for that resource.
+
+### Retry budget and HTTP transport (REST)
+
+- **`max_attempts`**, **`initial_delay`**, and **`backoff_factor`** still describe the overall retry budget surfaced to **`APISettings`** (including **`RestService`** auth backoff).
+- **`honor_retry_after_header`**, **`max_retry_after_seconds`**, **`max_backoff_seconds`**, and **`backoff_jitter_seconds`** configure urllib3 `Retry` on the shared **`requests.Session`**: when **`honor_retry_after_header`** is true, the client sleeps per **`Retry-After`** on responses urllib3 retries (including **429**, **503**, and **413**), with **`Retry-After`** capped by **`max_retry_after_seconds`**. Exponential backoff between attempts is capped by **`max_backoff_seconds`**; **`backoff_jitter_seconds`** adds random delay on that backoff path only (urllib3 behavior).
+- Turning on **`Retry-After`** can increase wall-clock time per call versus ignoring it; **`max_attempts`** defaults are unchanged.
 
 ### Database resources and request contexts
 

@@ -46,6 +46,28 @@ class RetryConfig(BaseModel):
     max_attempts: int = Field(default=3, ge=1)
     initial_delay: float = Field(default=1.0, gt=0)
     backoff_factor: float = Field(default=2.0, gt=1)
+    honor_retry_after_header: bool = Field(
+        default=True,
+        description=(
+            "When true, urllib3 honors Retry-After on responses it retries "
+            "(429, 503, 413 per urllib3), capped by max_retry_after_seconds."
+        ),
+    )
+    max_retry_after_seconds: int = Field(
+        default=21600,
+        ge=1,
+        description="Maximum parsed Retry-After delay in seconds (matches urllib3 retry_after_max).",
+    )
+    max_backoff_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description="Maximum sleep seconds for exponential backoff between transport retries.",
+    )
+    backoff_jitter_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description="Maximum extra random seconds added to exponential backoff (urllib3 backoff_jitter).",
+    )
 
 
 class LoadingFormat(str, Enum):

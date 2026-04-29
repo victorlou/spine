@@ -22,6 +22,7 @@ from src.auth.jwt_providers import get_provider
 from src.config.config_models import ResourceConfig, SourceConfig
 from src.config.settings import Settings
 from src.service.base_service import BaseSourceService, ServiceError
+from src.service.rate_limit_http import rate_limit_context_from_response
 from src.utils.data_utils import dict_response_key_to_records
 from src.utils.dynamic_values import get_resolver, resolve_headers_dict, resolve_request_body
 from src.utils.logger import REDACTED_PLACEHOLDER, get_logger, redact_text
@@ -685,17 +686,30 @@ class RestService(BaseSourceService):
                     except ValueError:
                         error_detail = f": {response.text[:200]}"
 
-                    self.logger.error(
-                        "Request failed",
-                        extra_fields={
-                            "status_code": response.status_code,
-                            "error_detail": error_detail,
-                            "method": resource.method,
-                            "url": url,
-                            "attempt": retry_count + 1,
-                            "max_attempts": max_retries + 1,
-                        },
-                    )
+                    rl_ctx: Dict[str, Any] = {}
+                    if response.status_code in (429, 503):
+                        rl_ctx = rate_limit_context_from_response(
+                            response,
+                            retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
+                        )
+
+                    log_payload = {
+                        "status_code": response.status_code,
+                        "error_detail": error_detail,
+                        "method": resource.method,
+                        "url": url,
+                        "attempt": retry_count + 1,
+                        "max_attempts": max_retries + 1,
+                        **rl_ctx,
+                    }
+
+                    if response.status_code in (429, 503):
+                        self.logger.warning(
+                            "Request failed (rate limited or unavailable)",
+                            extra_fields=log_payload,
+                        )
+                    else:
+                        self.logger.error("Request failed", extra_fields=log_payload)
 
                     # Check for auth failure
                     is_auth_failure = response.status_code == 401 and any(
@@ -729,6 +743,24 @@ class RestService(BaseSourceService):
                                     "max_attempts": max_retries + 1,
                                 },
                             )
+
+                    if response.status_code in (429, 503):
+                        raise ServiceError(
+                            message=(f"API request failed with status {response.status_code}"),
+                            operation=f"{resource.method} {url}",
+                            service_name=self.__class__.__name__,
+                            is_retryable=True,
+                            details={
+                                "status_code": response.status_code,
+                                "error_detail": error_detail,
+                                "method": resource.method,
+                                "url": url,
+                                "resource_name": resource_name,
+                                "attempt": retry_count + 1,
+                                "max_attempts": max_retries + 1,
+                                **rl_ctx,
+                            },
+                        )
 
                     # For non-auth failures or if we're out of retries, raise
                     response.raise_for_status()

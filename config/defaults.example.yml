@@ -5,6 +5,11 @@ defaults:
     max_attempts: 3
     initial_delay: 1
     backoff_factor: 2
+    # HTTP transport (urllib3): honor Retry-After on 429/503/413; cap parsed delay and backoff.
+    honor_retry_after_header: true
+    max_retry_after_seconds: 21600
+    max_backoff_seconds: 120
+    backoff_jitter_seconds: 0
 
   # Default is false, when true, run Spark df.count() for exact row totals in logs and summaries (full scan).
   log_full_row_count: false

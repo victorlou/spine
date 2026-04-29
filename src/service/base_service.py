@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.config.settings import Settings
+from src.service.rate_limit_http import rate_limit_context_from_response
 from src.utils.exceptions import ServiceError
 from src.utils.logger import get_logger
 from src.utils.url_join import join_http_base_and_path
@@ -61,6 +62,10 @@ class BaseSourceService(ABC):
         retry_strategy = Retry(
             total=self.settings.api.MAX_RETRIES,
             backoff_factor=self.settings.api.RETRY_BACKOFF,
+            backoff_max=self.settings.api.MAX_BACKOFF_SECONDS,
+            backoff_jitter=self.settings.api.BACKOFF_JITTER_SECONDS,
+            retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
+            respect_retry_after_header=self.settings.api.HONOR_RETRY_AFTER_HEADER,
             # 401 handled separately to allow auth reset
             status_forcelist=[429, 500, 502, 503, 504, 507, 508, 509],
             allowed_methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
@@ -69,8 +74,6 @@ class BaseSourceService(ABC):
             connect=self.settings.api.MAX_RETRIES,
             read=self.settings.api.MAX_RETRIES,
             redirect=3,
-            # Don't respect Retry-After headers - use our backoff strategy
-            respect_retry_after_header=False,
         )
 
         # Configure adapter with retry strategy
@@ -176,8 +179,19 @@ class BaseSourceService(ABC):
                 except ValueError:
                     error_info["response_text"] = response.text[:200]
 
-                # Log the error
-                self.logger.error("API request failed", extra_fields=error_info)
+                if response.status_code in (429, 503):
+                    error_info.update(
+                        rate_limit_context_from_response(
+                            response,
+                            retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
+                        )
+                    )
+                    self.logger.warning(
+                        "API request failed (rate limited or unavailable)",
+                        extra_fields=error_info,
+                    )
+                else:
+                    self.logger.error("API request failed", extra_fields=error_info)
 
                 # Check for auth failure that needs token reset
                 auth_needs_reset = response.status_code == 401 and any(

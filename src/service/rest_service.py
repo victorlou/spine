@@ -22,7 +22,7 @@ from src.auth.jwt_providers import get_provider
 from src.config.config_models import ResourceConfig, SourceConfig
 from src.config.settings import Settings
 from src.service.base_service import BaseSourceService, ServiceError
-from src.service.rate_limit_http import rate_limit_context_from_response
+from src.service.rate_limit_http import rate_limit_observability_for_error_response
 from src.utils.data_utils import dict_response_key_to_records
 from src.utils.dynamic_values import get_resolver, resolve_headers_dict, resolve_request_body
 from src.utils.logger import REDACTED_PLACEHOLDER, get_logger, redact_text
@@ -686,12 +686,10 @@ class RestService(BaseSourceService):
                     except ValueError:
                         error_detail = f": {response.text[:200]}"
 
-                    rl_ctx: Dict[str, Any] = {}
-                    if response.status_code in (429, 503):
-                        rl_ctx = rate_limit_context_from_response(
-                            response,
-                            retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
-                        )
+                    rl_ctx, rate_limit_style_log = rate_limit_observability_for_error_response(
+                        response,
+                        retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
+                    )
 
                     log_payload = {
                         "status_code": response.status_code,
@@ -703,7 +701,7 @@ class RestService(BaseSourceService):
                         **rl_ctx,
                     }
 
-                    if response.status_code in (429, 503):
+                    if rate_limit_style_log:
                         self.logger.warning(
                             "Request failed (rate limited or unavailable)",
                             extra_fields=log_payload,

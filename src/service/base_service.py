@@ -11,7 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.config.settings import Settings
-from src.service.rate_limit_http import rate_limit_context_from_response
+from src.service.rate_limit_http import rate_limit_observability_for_error_response
 from src.utils.exceptions import ServiceError
 from src.utils.logger import get_logger
 from src.utils.url_join import join_http_base_and_path
@@ -179,13 +179,12 @@ class BaseSourceService(ABC):
                 except ValueError:
                     error_info["response_text"] = response.text[:200]
 
-                if response.status_code in (429, 503):
-                    error_info.update(
-                        rate_limit_context_from_response(
-                            response,
-                            retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
-                        )
-                    )
+                rl_ctx, rate_limit_style_log = rate_limit_observability_for_error_response(
+                    response,
+                    retry_after_max=self.settings.api.MAX_RETRY_AFTER_SECONDS,
+                )
+                error_info.update(rl_ctx)
+                if rate_limit_style_log:
                     self.logger.warning(
                         "API request failed (rate limited or unavailable)",
                         extra_fields=error_info,

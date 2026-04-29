@@ -4,7 +4,7 @@ Retry-After and rate-limit header helpers for HTTP client observability.
 Uses urllib3's ``Retry.parse_retry_after`` so caps match transport behavior.
 """
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import requests
 from urllib3.exceptions import InvalidHeader
@@ -68,3 +68,26 @@ def rate_limit_context_from_response(
         if parsed is not None:
             out["retry_after_seconds"] = parsed
     return out
+
+
+def rate_limit_observability_for_error_response(
+    response: requests.Response,
+    *,
+    retry_after_max: int,
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Structured fields and log severity hint for a non-OK HTTP response.
+
+    Returns ``(extra_fields, use_rate_limit_style_log)``. When
+    ``use_rate_limit_style_log`` is true, callers should use the same warning
+    path as for 429/503 (rate limited or unavailable). For 413, that applies
+    only when ``Retry-After`` or whitelisted rate-limit headers produced
+    non-empty context, matching urllib3 transport retries on 413 with headers.
+    """
+    code = response.status_code
+    if code not in (429, 503, 413):
+        return {}, False
+    ctx = rate_limit_context_from_response(response, retry_after_max=retry_after_max)
+    if code in (429, 503):
+        return ctx, True
+    return ctx, bool(ctx)

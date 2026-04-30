@@ -250,3 +250,56 @@ def test_resolve_request_body_exclude_keys() -> None:
     vr = get_resolver(redis)
     out = resolve_request_body({"x": 1, "y": 2}, vr, exclude_keys=["x"])
     assert "x" not in out and out["y"] == 2
+
+
+def test_jinja_single_expression_falls_back_to_render(monkeypatch: pytest.MonkeyPatch) -> None:
+    jr = JinjaValueResolver(redis_context=MagicMock())
+
+    class _Expr:
+        def __call__(self, **_ctx):
+            raise RuntimeError("compile path failed")
+
+    class _Template:
+        def render(self, **_ctx):
+            return "render-ok"
+
+    monkeypatch.setattr(jr._env, "compile_expression", lambda _inner: _Expr())
+    monkeypatch.setattr(jr._env, "from_string", lambda _tpl: _Template())
+    assert jr.resolve("{{ now_unix() }}") == "render-ok"
+
+
+def test_resolve_headers_dict_mixed_values_uses_redis_context_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolver = MagicMock()
+    resolver.resolve.side_effect = lambda v: f"resolved:{v}"
+    monkeypatch.setattr("src.utils.dynamic_values.get_resolver", lambda _rc: resolver)
+    out = resolve_headers_dict({"A": "v", "B": 2}, redis_context=MagicMock())
+    assert out == {"A": "resolved:v", "B": "resolved:2"}
+    assert resolver.resolve.call_count == 2
+
+
+def test_resolve_request_body_overrides_precedence_with_nested_values() -> None:
+    vr = MagicMock()
+    vr.resolve.side_effect = lambda v, context=None: (
+        f"{context['prefix']}-suffix"
+        if isinstance(v, str) and v == "{{ prefix }}-suffix"
+        else {"resolved": True} if isinstance(v, dict) else [1, 2, 3] if isinstance(v, list) else v
+    )
+    out = resolve_request_body(
+        {"prefix": "raw", "joined": "{{ prefix }}-suffix", "obj": {"x": 1}, "arr": [1]},
+        vr,
+        overrides={"prefix": "override"},
+        exclude_keys=["arr"],
+    )
+    assert out["prefix"] == "override"
+    assert out["joined"] == "override-suffix"
+    assert out["obj"] == {"resolved": True}
+    assert "arr" not in out
+
+
+def test_resolve_request_body_bubbles_resolver_errors() -> None:
+    vr = MagicMock()
+    vr.resolve.side_effect = ResolverError("bad body")
+    with pytest.raises(ResolverError, match="bad body"):
+        resolve_request_body({"x": {"k": "v"}}, vr)

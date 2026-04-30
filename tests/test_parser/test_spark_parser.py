@@ -257,3 +257,105 @@ def test_parse_ensure_param_values_inner_error_is_swallowed() -> None:
 
     out = parser.parse([{"id": "1"}])
     assert out is base_df
+
+
+def test_parse_ensure_param_values_success_join_branch() -> None:
+    ensure_cfg = {"enabled": True, "param_name": "id", "output_field": "id"}
+    parser = SparkParser(
+        config=ResourceConfig(ensure_param_values_in_output=ensure_cfg),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    base_df = MagicMock()
+    base_df.columns = ["id", "name"]
+    base_df.__getitem__ = MagicMock(return_value=MagicMock())
+    base_df.alias.return_value = base_df
+    params_df = MagicMock()
+    params_df.alias.return_value = params_df
+    params_df.__getitem__ = MagicMock(return_value=MagicMock())
+    joined = MagicMock()
+    result_df = MagicMock()
+    joined.select.return_value = result_df
+    params_df.alias.return_value.join.return_value = joined
+    parser.spark.createDataFrame.side_effect = [base_df, params_df]
+    parser._get_request_value = MagicMock(return_value='["1","2"]')  # type: ignore[method-assign]
+
+    out = parser.parse([{"id": "1", "name": "A"}])
+    assert out is result_df
+    joined.select.assert_called_once()
+
+
+def test_parse_ensure_param_values_skips_when_no_values_found() -> None:
+    ensure_cfg = {"enabled": True, "param_name": "id", "output_field": "id"}
+    parser = SparkParser(
+        config=ResourceConfig(ensure_param_values_in_output=ensure_cfg),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    base_df = MagicMock()
+    base_df.columns = ["id"]
+    parser.spark.createDataFrame.return_value = base_df
+    parser._get_request_value = MagicMock(return_value=None)  # type: ignore[method-assign]
+
+    out = parser.parse([{"id": "1"}])
+    assert out is base_df
+    assert parser.spark.createDataFrame.call_count == 1
+
+
+def test_apply_transformations_add_column_from_request_missing_value_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ResourceConfig(
+        transformations=[
+            Transformation(
+                type=TransformationType.ADD_COLUMN_FROM_REQUEST,
+                name="ctx",
+                source="k",
+                location="parameters",
+                data_type="string",
+            )
+        ],
+    )
+    parser = SparkParser(
+        config=config,
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    parser._get_request_value = MagicMock(return_value=None)  # type: ignore[method-assign]
+    df = MagicMock()
+    df.columns = ["a"]
+    df.withColumn = MagicMock(return_value=df)
+    monkeypatch.setattr("src.parser.spark_parser.lit", lambda _x: MagicMock())
+    out = parser._apply_transformations(df, {"parameters": {}})
+    assert out is df
+    df.withColumn.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "data_type,ctx,expected",
+    [
+        ("integer", {"parameters": {"k": [1]}}, "1"),
+        ("float", {"parameters": {"k": [1.5]}}, "1.5"),
+        ("array", {"parameters": {"k": "x"}}, '["x"]'),
+    ],
+)
+def test_get_request_value_conversion_branches(data_type: str, ctx: dict, expected: str) -> None:
+    parser = SparkParser(
+        config=ResourceConfig(),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    out = parser._get_request_value("k", "parameters", data_type=data_type, request_context=ctx)
+    assert out == expected

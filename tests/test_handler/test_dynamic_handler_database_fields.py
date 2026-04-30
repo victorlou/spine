@@ -7,6 +7,7 @@ import pytest
 from src.config.config_models import ResourceConfig, SchemaField
 from src.handler.dynamic_handler import DynamicHandler
 from src.planner.execution_plan import ResourceMetadata
+from src.utils.exceptions import HandlerError
 from src.utils.logger import get_logger
 
 
@@ -176,3 +177,32 @@ def test_build_database_dataframe_no_contexts_no_extract() -> None:
 
     assert fake.extract_invocations == 0
     assert out is None
+
+
+def test_build_database_dataframe_raises_when_configured_source_column_missing(
+    patch_spark_col,
+) -> None:
+    handler = object.__new__(DynamicHandler)
+    handler.spark = MagicMock()
+    handler.logger = get_logger("test_dynamic_handler_db")
+
+    extract_df = _make_extract_df(n_select_cols=2)
+    rc = ResourceConfig(
+        method="GET",
+        database_schema="public",
+        database_table="users",
+        fields=[SchemaField(name="user_id", source="missing_col")],
+    )
+    meta = ResourceMetadata(
+        source_name="pg",
+        resource_name="users",
+        dependencies=set(),
+        batch_inputs={},
+        config=rc,
+    )
+    fake = _FakeDbService(extract_df)
+    fake.close = MagicMock()
+
+    with pytest.raises(HandlerError, match="Configured field source"):
+        DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=[{}])
+    fake.close.assert_called_once()

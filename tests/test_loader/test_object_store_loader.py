@@ -7,7 +7,7 @@ import pytest
 from pyspark.sql.types import StringType, StructField, StructType
 
 import src.loader.object_store_loader as object_store_loader_module
-from src.config.config_models import LoadingConfig, LoadingFormat
+from src.config.config_models import LoadingConfig, LoadingFormat, SourceType
 from src.loader.object_store_loader import ObjectStoreLoader, retry_on_transient_storage_error
 from src.utils.exceptions import LoaderError
 
@@ -341,6 +341,8 @@ def test_retry_succeeds_after_one_transient_failure() -> None:
         ("hana", "database"),
         ("unknown_type", ""),
         (None, ""),
+        (SourceType.REST_API, "rest_api"),
+        (SourceType.PYTHON_SDK, "sdk"),
     ],
 )
 def test_get_source_type_prefix_all_branches(source_type, expected) -> None:
@@ -348,12 +350,11 @@ def test_get_source_type_prefix_all_branches(source_type, expected) -> None:
     assert loader._get_source_type_prefix(source_type) == expected
 
 
-def test_get_source_type_prefix_with_enum_value() -> None:
-    from src.config.config_models import SourceType
-
+def test_prepend_source_type_prefix_strips_and_maps() -> None:
     loader = ObjectStoreLoader()
-    assert loader._get_source_type_prefix(SourceType.REST_API) == "rest_api"
-    assert loader._get_source_type_prefix(SourceType.PYTHON_SDK) == "sdk"
+    assert loader._prepend_source_type_prefix("foo/bar", "rest_api") == "rest_api/foo/bar"
+    assert loader._prepend_source_type_prefix("/foo/bar/", "python_sdk") == "sdk/foo/bar"
+    assert loader._prepend_source_type_prefix("foo/bar", "unknown") == "foo/bar"
 
 
 # ---------------------------------------------------------------------------
@@ -790,3 +791,68 @@ def test_cleanup_temp_dir_exception_logged() -> None:
     store.delete.side_effect = RuntimeError("delete failed")
     loader._cleanup_temp_dir(store, "s3a://b/.temp/.spark-writes/part-0.parquet")
     loader.logger.warning.assert_called_once()
+
+
+def test_destination_exists_false_when_loading_base_uri_raises() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format="delta")
+    with patch(
+        "src.loader.object_store_loader.loading_base_uri", side_effect=ValueError("bad uri")
+    ):
+        assert loader.destination_exists(cfg) is False
+
+
+def test_load_delta_merge_existing_table_missing_merge_keys_raises() -> None:
+    loader, df = _loader_with_mocked_internals(table_exists_return=True)
+    cfg = SimpleNamespace(
+        write_mode="merge",
+        merge_keys=None,
+        compression=None,
+        destination="s3",
+        prefix="p/r",
+        force_nondeterministic_deduplication=False,
+    )
+    with pytest.raises(LoaderError, match="merge_keys must be provided"):
+        loader._load_delta(df, cfg, base_uri="s3a://b")
+
+
+@patch("src.loader.object_store_loader.DeltaTable", None)
+def test_perform_delta_merge_when_delta_table_unavailable() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    df = MagicMock()
+    df.columns = ["id"]
+    cfg = MagicMock()
+    with pytest.raises(LoaderError, match="DeltaTable is not available"):
+        loader._perform_delta_merge(df, "s3a://b/t", ["id"], cfg)
+
+
+def test_ensure_dataframe_invalid_input_type_raises_loader_error() -> None:
+    loader = ObjectStoreLoader()
+    loader.spark = MagicMock()
+    loader.logger = MagicMock()
+    with patch.object(object_store_loader_module, "DataFrame", _DummySparkDataFrame):
+        with pytest.raises(LoaderError, match="Failed to ensure Spark DataFrame"):
+            loader._ensure_dataframe(object(), None)
+
+
+def test_perform_iceberg_merge_sql_failure_drops_temp_view() -> None:
+    loader = ObjectStoreLoader()
+    src_df, _, _, _ = _df_chain()
+    src_df.columns = ["id"]
+    tgt_df = MagicMock()
+    field = MagicMock()
+    field.name = "id"
+    field.dataType.simpleString.return_value = "int"
+    tgt_df.schema.fields = [field]
+    tgt_df.columns = ["id"]
+    spark = MagicMock()
+    spark.table.return_value = tgt_df
+    spark.sql.side_effect = RuntimeError("merge failed")
+    loader.spark = spark
+
+    with pytest.raises(LoaderError, match="Failed to perform Iceberg MERGE"):
+        loader._perform_iceberg_merge(src_df, "file:///w/ns/t", ["id"], "file:///w")
+
+    spark.catalog.dropTempView.assert_called_once()

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.config.config_models import (
+    QueriesConfig,
     RequestInputConfig,
     ResourceConfig,
     SourceConfig,
@@ -14,6 +15,7 @@ from src.config.config_models import (
 from src.planner.execution_plan import ExecutionPlan, ResourceMetadata
 from src.utils.dynamic_values import ComplexDynamicValue, DynamicSourceReference, DynamicValueType
 from src.utils.exceptions import PlanningError
+from src.utils.query_utils import format_query_ref_key
 from tests.conftest import make_minimal_pipeline_config, make_rest_chain_resources
 
 
@@ -718,3 +720,78 @@ def test_get_input_filter_returns_filter_when_set(tmp_path) -> None:
     result = plan.get_input_filter("api", "child", "pid")
     assert result is not None
     assert result.field == "status"
+
+
+def _write_query_file(tmp_path, name: str, sql: str) -> None:
+    qdir = tmp_path / "queries"
+    qdir.mkdir(parents=True, exist_ok=True)
+    (qdir / f"{name}.sql").write_text(sql, encoding="utf-8")
+
+
+def _rest_resource_with_databricks_input(query_token: str) -> dict:
+    """REST resource whose query input resolves to a Databricks query ref via string marker."""
+    return {
+        "api": SourceConfig(
+            type=SourceType.REST_API,
+            base_url="https://example.com",
+            enabled=True,
+            resources={
+                "r": ResourceConfig(
+                    enabled=True,
+                    method="GET",
+                    path="/data",
+                    response_type="json",
+                    request_inputs={
+                        "ids": RequestInputConfig(
+                            value=f"databricks('{query_token}')",
+                            location="query",
+                        )
+                    },
+                )
+            },
+        )
+    }
+
+
+def test_execution_plan_databricks_query_resolves_and_stores_redis(tmp_path, monkeypatch) -> None:
+    """Plans with databricks('…') inputs load SQL, resolve via DatabricksUtils, and store in Redis."""
+    _write_query_file(tmp_path, "q1", "SELECT 1 AS id")
+    cfg = make_minimal_pipeline_config(
+        tmp_path,
+        queries=[QueriesConfig(name="q1", file="q1.sql")],
+        sources=_rest_resource_with_databricks_input("q1"),
+    )
+    mock_du_cls = MagicMock()
+    mock_du_cls.return_value.resolve_databricks_query.return_value = [{"id": 1}]
+    monkeypatch.setattr("src.planner.execution_plan.DatabricksUtils", mock_du_cls)
+
+    redis = MagicMock()
+    ExecutionPlan(cfg, redis_context=redis, selection=None)
+
+    mock_du_cls.assert_called()
+    redis.store.assert_called()
+    kwargs = redis.store.call_args.kwargs
+    assert kwargs["key"] == format_query_ref_key("q1")
+    assert kwargs["data"] == [{"id": 1}]
+    assert kwargs.get("ttl") == 3600
+
+
+def test_execution_plan_databricks_missing_query_ref_raises(tmp_path) -> None:
+    cfg = make_minimal_pipeline_config(
+        tmp_path,
+        queries=[],
+        sources=_rest_resource_with_databricks_input("unknown_query"),
+    )
+    with pytest.raises(PlanningError, match="Missing dependency query reference"):
+        ExecutionPlan(cfg, redis_context=MagicMock(), selection=None)
+
+
+def test_execution_plan_databricks_invalid_sql_raises(tmp_path) -> None:
+    _write_query_file(tmp_path, "q1", "DELETE FROM some_table")
+    cfg = make_minimal_pipeline_config(
+        tmp_path,
+        queries=[QueriesConfig(name="q1", file="q1.sql")],
+        sources=_rest_resource_with_databricks_input("q1"),
+    )
+    with pytest.raises(PlanningError, match="Invalid query content loaded"):
+        ExecutionPlan(cfg, redis_context=MagicMock(), selection=None)

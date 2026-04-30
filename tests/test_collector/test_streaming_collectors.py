@@ -1,5 +1,6 @@
 """Lightweight tests for streaming collectors (Spark and Redis mocked)."""
 
+import builtins
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -274,6 +275,170 @@ def test_streaming_parse_batches_returns_single_df_without_union(streaming_deps:
     df.unionByName.assert_not_called()
 
 
+def test_streaming_is_empty_true_when_no_batches_and_no_accumulated_df(
+    streaming_deps: dict,
+) -> None:
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=3,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    assert c.is_empty() is True
+
+
+def test_streaming_is_empty_false_when_accumulated_df(streaming_deps: dict) -> None:
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=3,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    c.total_parsed_df = MagicMock()
+    assert c.is_empty() is False
+
+
+def test_streaming_second_flush_merges_via_union_by_name(streaming_deps: dict) -> None:
+    """After the first parsed flush, the second merges with unionByName on the accumulator."""
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=1,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    df1 = MagicMock()
+    df1.count.return_value = 1
+    df2 = MagicMock()
+    df2.count.return_value = 1
+    merged = MagicMock()
+    merged.count.return_value = 2
+    df1.unionByName.return_value = merged
+    c._parse_batches = MagicMock(side_effect=[df1, df2])  # type: ignore[method-assign]
+
+    batch = RawDataBatch(raw_data=[{"x": 1}], request_context=None)
+    c.add_batch(batch)
+    assert c.total_parsed_df is df1
+    c.add_batch(batch)
+    df1.unionByName.assert_called_once_with(df2, allowMissingColumns=True)
+    assert c.total_parsed_df is merged
+
+
+def test_streaming_finalize_returns_none_without_batches_or_accumulator(
+    streaming_deps: dict,
+) -> None:
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=10,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    c._consolidate_temp_data = MagicMock()  # type: ignore[method-assign]
+    assert c.finalize() is None
+    c._consolidate_temp_data.assert_not_called()
+
+
+def test_streaming_consolidate_returns_accumulator_when_flush_count_zero(
+    streaming_deps: dict,
+) -> None:
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=10,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    df = MagicMock()
+    c.total_parsed_df = df
+    c.flush_count = 0
+    assert c._consolidate_temp_data() is df
+    streaming_deps["redis_context"].get.assert_not_called()
+
+
+def test_streaming_request_context_taken_from_first_batch(streaming_deps: dict) -> None:
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=10,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    first = {"run": 1}
+    second = {"run": 2}
+    c.add_batch(RawDataBatch(raw_data=[], request_context=first))
+    c.add_batch(RawDataBatch(raw_data=[], request_context=second))
+    assert c.request_context is first
+
+
+def test_streaming_spark_parser_construct_failure_propagates(
+    streaming_deps: dict, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "src.collector.streaming_collector.SparkParser",
+        MagicMock(side_effect=RuntimeError("SparkParser init failed")),
+    )
+    with pytest.raises(RuntimeError, match="SparkParser init failed"):
+        StreamingRawDataCollector(
+            redis_context=streaming_deps["redis_context"],
+            resource_key="rk",
+            flush_threshold=2,
+            spark=streaming_deps["spark"],
+            resource_meta=streaming_deps["resource_meta"],
+            service=streaming_deps["service"],
+            execution_plan=streaming_deps["execution_plan"],
+        )
+
+
+def test_streaming_finalize_swallows_unpersist_failure(streaming_deps: dict) -> None:
+    """finalize tolerates unpersist errors when the accumulator was never cached."""
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=10,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    df = MagicMock()
+    df.unpersist.side_effect = RuntimeError("not cached")
+    c.total_parsed_df = df
+    c._consolidate_temp_data = MagicMock(return_value=df)  # type: ignore[method-assign]
+    c._cleanup_temp_keys = MagicMock()  # type: ignore[method-assign]
+    assert c.finalize() is df
+
+
+def test_streaming_parse_batches_failure_propagates_after_logging(streaming_deps: dict) -> None:
+    c = StreamingRawDataCollector(
+        redis_context=streaming_deps["redis_context"],
+        resource_key="rk",
+        flush_threshold=2,
+        spark=streaming_deps["spark"],
+        resource_meta=streaming_deps["resource_meta"],
+        service=streaming_deps["service"],
+        execution_plan=streaming_deps["execution_plan"],
+    )
+    c.batches = [RawDataBatch(raw_data=[{"x": 1}], request_context=None)]
+    c._parse_data = MagicMock(side_effect=RuntimeError("parse batch failed"))  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="parse batch failed"):
+        c._parse_batches()
+
+
 @pytest.fixture
 def disk_deps(tmp_path) -> dict:
     redis_context = MagicMock()
@@ -489,3 +654,167 @@ def test_disk_parse_ndjson_file_uses_embedded_schema(disk_deps: dict, monkeypatc
     out = c._parse_ndjson_file(str(p))
     assert out is df
     assert c.spark.createDataFrame.call_args.kwargs["schema"] is not None
+
+
+def test_disk_merge_schemas_merges_duplicate_field_nullability(
+    disk_deps: dict, monkeypatch
+) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    s1 = StructType([StructField("a", StringType(), nullable=False)])
+    s2 = StructType([StructField("a", StringType(), nullable=True)])
+    merged = c._merge_schemas(s1, s2)
+    assert len(merged.fields) == 1
+    assert merged.fields[0].nullable is True
+
+
+def test_disk_add_batch_no_records_skips_write(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    c._parse_batch_to_records = MagicMock(return_value={"schema": None, "records": []})  # type: ignore[method-assign]
+    c._write_parse_result_to_disk = MagicMock()  # type: ignore[method-assign]
+    c.add_batch(RawDataBatch(raw_data=[{"x": 1}], request_context={}))
+    c._write_parse_result_to_disk.assert_not_called()
+
+
+def test_disk_is_empty_true_without_files_false_after_write(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    monkeypatch.setattr(c, "_get_all_ndjson_files", lambda: [])
+    assert c.is_empty() is True
+
+    c2 = _make_disk_collector(disk_deps, monkeypatch)
+    c2._write_parse_result_to_disk({"records": [{"n": 1}]})
+    assert c2.is_empty() is False
+
+
+def test_disk_finalize_skips_persist_when_rdd_empty(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    ndjson = Path(disk_deps["disk_path"]) / "rk_empty.ndjson"
+    monkeypatch.setattr(c, "_get_all_ndjson_files", lambda: [str(ndjson)])
+    df = MagicMock()
+    df.rdd.isEmpty.return_value = True
+    c.spark.read.json.return_value = df
+    monkeypatch.setattr(c, "_cleanup_ndjson_files", MagicMock())
+    monkeypatch.setattr(c, "cleanup_disk_path", MagicMock())
+
+    out = c.finalize()
+    assert out is df
+    df.persist.assert_not_called()
+
+
+def test_disk_get_all_ndjson_files_returns_empty_when_glob_raises(
+    disk_deps: dict, monkeypatch
+) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    monkeypatch.setattr(
+        "src.collector.disk_streaming_collector.glob.glob",
+        MagicMock(side_effect=RuntimeError("glob failed")),
+    )
+    assert c._get_all_ndjson_files() == []
+
+
+def test_disk_write_parse_result_to_disk_open_failure_propagates(
+    disk_deps: dict, monkeypatch
+) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+
+    def boom(*_a, **_kw):
+        raise OSError("cannot open")
+
+    monkeypatch.setattr("builtins.open", boom)
+    with pytest.raises(OSError, match="cannot open"):
+        c._write_parse_result_to_disk({"records": [{"x": 1}]})
+
+
+def test_disk_cleanup_ndjson_files_warning_when_remove_fails(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    p = Path(disk_deps["disk_path"]) / "orphan.ndjson"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "src.collector.disk_streaming_collector.os.remove", MagicMock(side_effect=OSError("rm"))
+    )
+    c._cleanup_ndjson_files([str(p)])
+
+
+def test_disk_init_fails_when_disk_path_not_created(disk_deps: dict, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.collector.disk_streaming_collector.os.makedirs",
+        MagicMock(side_effect=OSError("permission denied")),
+    )
+    with pytest.raises(OSError, match="permission denied"):
+        DiskStreamingDataCollector(
+            disk_path=disk_deps["disk_path"],
+            resource_key="rk",
+            file_size_threshold=1024,
+            spark=disk_deps["spark"],
+            redis_context=disk_deps["redis_context"],
+            resource_meta=disk_deps["resource_meta"],
+            service=disk_deps["service"],
+            execution_plan=disk_deps["execution_plan"],
+        )
+
+
+def test_disk_create_parser_spark_parser_failure_propagates(disk_deps: dict, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.collector.disk_streaming_collector.SparkParser",
+        MagicMock(side_effect=RuntimeError("parser init failed")),
+    )
+    with pytest.raises(RuntimeError, match="parser init failed"):
+        DiskStreamingDataCollector(
+            disk_path=disk_deps["disk_path"],
+            resource_key="rk2",
+            file_size_threshold=1024,
+            spark=disk_deps["spark"],
+            redis_context=disk_deps["redis_context"],
+            resource_meta=disk_deps["resource_meta"],
+            service=disk_deps["service"],
+            execution_plan=disk_deps["execution_plan"],
+        )
+
+
+def test_disk_should_rotate_and_rotate_file(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    c.file_size_threshold = 10
+    c._write_parse_result_to_disk({"records": [{"blob": "x" * 50}]})
+    assert c._should_rotate_file() is True
+    prev_counter = c.file_counter
+    c._rotate_file()
+    assert c.file_counter == prev_counter + 1
+
+
+def test_disk_rotate_file_requires_current_path(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    c.current_file_path = None
+    with pytest.raises(ValueError, match="Current file path is not initialized"):
+        c._rotate_file()
+
+
+def test_disk_parse_batch_parser_returns_empty_records(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    c.parser.parse_to_records.return_value = {"records": [], "schema": None}
+    batch = RawDataBatch(raw_data=[{"x": 1}], request_context=None)
+    assert c._parse_batch_to_records(batch) == {"schema": None, "records": []}
+
+
+def test_disk_cleanup_ndjson_files_deletes_and_removes_tree(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    p = Path(c.current_file_path)
+    p.write_text("{}\n", encoding="utf-8")
+    disk_root = Path(disk_deps["disk_path"])
+    assert disk_root.exists()
+    c._cleanup_ndjson_files([str(p)])
+    assert not disk_root.exists()
+    assert c.cleaned_up is True
+
+
+def test_disk_parse_ndjson_file_outer_error_propagates(disk_deps: dict, monkeypatch) -> None:
+    c = _make_disk_collector(disk_deps, monkeypatch)
+    p = Path(disk_deps["disk_path"]) / "bad.ndjson"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"records":[]}\n', encoding="utf-8")
+
+    def broken_open(*_a, **_k):
+        raise RuntimeError("open broke")
+
+    monkeypatch.setattr(builtins, "open", broken_open)
+    with pytest.raises(RuntimeError, match="open broke"):
+        c._parse_ndjson_file(str(p))

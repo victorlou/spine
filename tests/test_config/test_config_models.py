@@ -3,12 +3,15 @@
 import json
 import re
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
 from src.config.config_models import (
     AuthConfig,
+    ContextConfig,
+    ContextType,
     DefaultsConfig,
     InputConfig,
     LoadingConfig,
@@ -21,9 +24,12 @@ from src.config.config_models import (
     RequestFormatType,
     RequestInputConfig,
     ResourceConfig,
+    SnapshotConfig,
     SourceConfig,
     SourceType,
     StreamingConfig,
+    TableReadOptions,
+    is_database_source_type,
 )
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
@@ -87,11 +93,7 @@ def test_pipeline_config_get_effective_loading_destinations_respects_enabled_fla
         (RequestFormatType.STRING, "hello", "hello"),
         (RequestFormatType.STRING, ["a", "b"], "a"),  # list → first element as str
         (RequestFormatType.INTEGER, "3", 3),
-        (RequestFormatType.INTEGER, ["5"], 5),  # list-wrapped scalar
         (RequestFormatType.FLOAT, "1.5", 1.5),
-        (RequestFormatType.FLOAT, ["2.0"], 2.0),
-        (RequestFormatType.BOOLEAN, 1, True),
-        (RequestFormatType.BOOLEAN, 0, False),
         (RequestFormatType.ARRAY, "x", ["x"]),  # scalar → wrapped in list
         (RequestFormatType.ARRAY, [1, 2], [1, 2]),  # list → passthrough
         (RequestFormatType.JSON_STRING, [1, 2], json.dumps([1, 2])),
@@ -101,6 +103,25 @@ def test_pipeline_config_get_effective_loading_destinations_respects_enabled_fla
 def test_input_config_format_request_value_parametrized(fmt_type, input_value, expected) -> None:
     cfg = InputConfig(value="placeholder", request_format=RequestFormatConfig(type=fmt_type))
     assert cfg.format_request_value(input_value) == expected
+
+
+def test_input_config_format_request_value_boolean_and_list_wrapped_numeric() -> None:
+    """Branches shared with parametrized matrix; kept explicit for scalar list handling."""
+    cfg_b = InputConfig(
+        value="placeholder", request_format=RequestFormatConfig(type=RequestFormatType.BOOLEAN)
+    )
+    assert cfg_b.format_request_value(1) is True
+    assert cfg_b.format_request_value(0) is False
+
+    cfg_i = InputConfig(
+        value="placeholder", request_format=RequestFormatConfig(type=RequestFormatType.INTEGER)
+    )
+    assert cfg_i.format_request_value(["5"]) == 5
+
+    cfg_f = InputConfig(
+        value="placeholder", request_format=RequestFormatConfig(type=RequestFormatType.FLOAT)
+    )
+    assert cfg_f.format_request_value(["2.0"]) == 2.0
 
 
 def test_input_config_format_request_value_no_format_passthrough() -> None:
@@ -114,27 +135,22 @@ def test_input_config_format_request_value_no_format_passthrough() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_input_config_preprocess_concat_joins_list_with_separator() -> None:
+@pytest.mark.parametrize(
+    "separator, input_value, expected",
+    [
+        (",", ["a", "b", "c"], "a,b,c"),
+        ("-", "x", "x"),  # scalar wrapped to single-element list before join
+    ],
+)
+def test_input_config_preprocess_concat(separator, input_value, expected) -> None:
     cfg = InputConfig(
         value="placeholder",
         request_format=RequestFormatConfig(
             type=RequestFormatType.STRING,
-            preprocess=[PreprocessConfig(type=PreprocessorType.CONCAT, separator=",")],
+            preprocess=[PreprocessConfig(type=PreprocessorType.CONCAT, separator=separator)],
         ),
     )
-    assert cfg.format_request_value(["a", "b", "c"]) == "a,b,c"
-
-
-def test_input_config_preprocess_concat_wraps_scalar_then_joins() -> None:
-    cfg = InputConfig(
-        value="placeholder",
-        request_format=RequestFormatConfig(
-            type=RequestFormatType.STRING,
-            preprocess=[PreprocessConfig(type=PreprocessorType.CONCAT, separator="-")],
-        ),
-    )
-    # Scalar is wrapped into [scalar] before CONCAT, then joined → single-element result
-    assert cfg.format_request_value("x") == "x"
+    assert cfg.format_request_value(input_value) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -332,14 +348,20 @@ def test_pipeline_config_load_query_file_missing_name_raises(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_loading_config_merge_mode_requires_merge_keys() -> None:
+@pytest.mark.parametrize(
+    "merge_keys",
+    [pytest.param(None, id="missing"), pytest.param([], id="empty_list")],
+)
+def test_loading_config_merge_mode_requires_nonempty_merge_keys(merge_keys) -> None:
+    kwargs: dict = {
+        "destination": "local",
+        "storage_root": "/tmp",
+        "write_mode": "merge",
+    }
+    if merge_keys is not None:
+        kwargs["merge_keys"] = merge_keys
     with pytest.raises(ValidationError, match="merge_keys"):
-        LoadingConfig(destination="local", storage_root="/tmp", write_mode="merge")
-
-
-def test_loading_config_merge_empty_list_raises() -> None:
-    with pytest.raises(ValidationError, match="merge_keys"):
-        LoadingConfig(destination="local", storage_root="/tmp", write_mode="merge", merge_keys=[])
+        LoadingConfig(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +639,185 @@ def test_source_config_database_requires_host() -> None:
                     path=None,
                     database_schema="public",
                     database_table="users",
+                )
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# is_database_source_type
+# ---------------------------------------------------------------------------
+
+
+def test_is_database_source_type_matches_relational_kinds() -> None:
+    assert is_database_source_type(SourceType.POSTGRESQL) is True
+    assert is_database_source_type(SourceType.HANA) is True
+    assert is_database_source_type(SourceType.REST_API) is False
+    assert is_database_source_type(SourceType.PYTHON_SDK) is False
+
+
+# ---------------------------------------------------------------------------
+# ContextConfig — Redis required when type is redis
+# ---------------------------------------------------------------------------
+
+
+def test_context_config_redis_type_requires_redis_block() -> None:
+    with pytest.raises(ValidationError, match="Redis configuration required"):
+        ContextConfig(type=ContextType.REDIS, redis=None)
+
+
+def test_context_config_redis_with_block_validates() -> None:
+    from src.config.config_models import RedisConfig
+
+    cfg = ContextConfig(type=ContextType.REDIS, redis=RedisConfig(host="h"))
+    assert cfg.redis is not None
+
+
+# ---------------------------------------------------------------------------
+# LoadingConfig — prefix shape for object-store destinations
+# ---------------------------------------------------------------------------
+
+
+def test_loading_config_prefix_single_segment_raises() -> None:
+    with pytest.raises(ValidationError, match="prefix must follow"):
+        LoadingConfig(destination="s3", s3_bucket="b", prefix="only_segment")
+
+
+def test_loading_config_prefix_must_not_include_data_segment() -> None:
+    with pytest.raises(ValidationError, match="prefix should not include"):
+        LoadingConfig(destination="s3", s3_bucket="b", prefix="src/res/data")
+
+
+# ---------------------------------------------------------------------------
+# ResourceConfig.resolve_parameters
+# ---------------------------------------------------------------------------
+
+
+def test_resource_config_resolve_parameters_formats_inputs_and_passes_extras() -> None:
+    redis_context = MagicMock()
+    res = ResourceConfig(
+        method="GET",
+        path="/r",
+        request_inputs={
+            "q": RequestInputConfig(
+                value="unused",
+                location="query",
+                request_format=RequestFormatConfig(type=RequestFormatType.STRING),
+            ),
+        },
+    )
+    out = res.resolve_parameters(
+        redis_context,
+        params={"q": ["a", "b"], "extra_plain": 1},
+    )
+    assert out["q"] == "a"
+    assert out["extra_plain"] == 1
+
+
+def test_resource_config_resolve_parameters_custom_param_dict_non_input_config() -> None:
+    redis_context = MagicMock()
+    res = ResourceConfig(method="GET", path="/r")
+    out = res.resolve_parameters(
+        redis_context,
+        params={"x": 1},
+        param_dict={"plain_key": "literal"},
+    )
+    assert out == {"plain_key": "literal"}
+
+
+def test_resource_config_resolve_parameters_resolves_dynamic_value(monkeypatch) -> None:
+    redis_context = MagicMock()
+    resolver = MagicMock()
+    resolver.resolve.return_value = "dyn-resolved"
+
+    monkeypatch.setattr(
+        "src.config.config_models.get_resolver",
+        lambda _rc: resolver,
+    )
+    res = ResourceConfig(
+        method="GET",
+        path="/r",
+        request_inputs={
+            "p": RequestInputConfig(value="{{dyn}}", location="query"),
+        },
+    )
+    out = res.resolve_parameters(redis_context, params={})
+    assert resolver.resolve.call_count == 1
+    assert out["p"] == "dyn-resolved"
+
+
+# ---------------------------------------------------------------------------
+# InputConfig — helpers and format_request_value edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_input_config_format_request_value_none_returns_none() -> None:
+    cfg = InputConfig(value="x", request_format=RequestFormatConfig(type=RequestFormatType.STRING))
+    assert cfg.format_request_value(None) is None
+
+
+def test_input_config_get_source_and_filter_config() -> None:
+    dyn = ComplexDynamicValue(
+        type=DynamicValueType.SOURCE,
+        source_config=DynamicSourceReference(source="p", field="id"),
+    )
+    cfg = InputConfig(value=dyn)
+    assert cfg.get_source_config() is dyn.source_config
+    assert cfg.get_filter_config() is None
+
+    dyn_f = ComplexDynamicValue(
+        type=DynamicValueType.SOURCE,
+        source_config=DynamicSourceReference(
+            source="p",
+            field="id",
+            filter=FilterConfig(field="s", value_source="active"),
+        ),
+    )
+    cfg_f = InputConfig(value=dyn_f)
+    assert cfg_f.get_filter_config() is dyn_f.source_config.filter
+
+
+def test_input_config_get_databricks_query_refs() -> None:
+    cfg = InputConfig(value="prefix databricks( 'my_query_ref' ) suffix")
+    assert cfg.get_databricks_query_refs() == ["my_query_ref"]
+
+
+def test_input_config_preprocess_unsupported_concat_without_separator_raises() -> None:
+    bad_step = PreprocessConfig.model_construct(type=PreprocessorType.CONCAT, separator=None)
+    rf = RequestFormatConfig.model_construct(
+        type=RequestFormatType.STRING,
+        preprocess=[bad_step],
+    )
+    cfg = InputConfig.model_construct(value="x", request_format=rf, input_format="single")
+    with pytest.raises(ValueError, match="Unsupported preprocessing type"):
+        cfg.format_request_value(["a", "b"])
+
+
+# ---------------------------------------------------------------------------
+# TableReadOptions — empty predicates list
+# ---------------------------------------------------------------------------
+
+
+def test_table_read_options_empty_predicates_raises() -> None:
+    with pytest.raises(ValidationError, match="predicates must be non-empty"):
+        TableReadOptions(predicates=[])
+
+
+# ---------------------------------------------------------------------------
+# SourceConfig — snapshot only for rest_api
+# ---------------------------------------------------------------------------
+
+
+def test_source_config_snapshot_on_non_rest_api_raises() -> None:
+    with pytest.raises(ValidationError, match="snapshot polling"):
+        SourceConfig(
+            type=SourceType.PYTHON_SDK,
+            sdk=PythonSDKConfig(module="mod", class_name="Cls"),
+            resources={
+                "r": ResourceConfig(
+                    method="run",
+                    path="/r",
+                    snapshot=SnapshotConfig(ready_condition="True"),
                 )
             },
         )

@@ -275,14 +275,6 @@ def test_is_empty_directory(mocked_spark: MagicMock) -> None:
     assert store.is_empty_directory("s3a://b/missing") is True
 
 
-def test_object_store_loader_prepends_source_type_prefix() -> None:
-    loader = ObjectStoreLoader()
-
-    assert loader._prepend_source_type_prefix("foo/bar", "rest_api") == "rest_api/foo/bar"
-    assert loader._prepend_source_type_prefix("/foo/bar/", "python_sdk") == "sdk/foo/bar"
-    assert loader._prepend_source_type_prefix("foo/bar", "unknown") == "foo/bar"
-
-
 def test_object_store_loader_generate_table_path_uses_object_store() -> None:
     loader = ObjectStoreLoader()
     loader.spark = MagicMock(name="spark")

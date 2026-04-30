@@ -1,9 +1,11 @@
 """Unit tests for small, deterministic ``DynamicHandler`` orchestration helpers."""
 
+import builtins
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from pyspark.sql import DataFrame as SparkDataFrame
 
 from src.config.config_models import (
     LoadingConfig,
@@ -13,7 +15,15 @@ from src.config.config_models import (
     SourceType,
 )
 from src.handler.dynamic_handler import DynamicHandler, RawDataBatch
-from src.utils.dynamic_values import FilterType, FilterValueSource
+from src.utils.dynamic_values import (
+    ComplexDynamicValue,
+    DynamicSourceReference,
+    DynamicValueType,
+    FilterConfig,
+    FilterOperator,
+    FilterType,
+    FilterValueSource,
+)
 from src.utils.exceptions import HandlerError
 from src.utils.logger import get_logger
 from src.utils.snapshot_poller import SnapshotError, SnapshotTimeoutError
@@ -246,7 +256,6 @@ def test_make_single_request_pagination_continues_after_page_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     h = _bare_handler()
-    h._resolve_resource_header_values = MagicMock(return_value={})
     h._resolve_parameter_values_list = MagicMock(return_value=[])
     h._build_parent_context = MagicMock(return_value={})
     h._resolve_request_body_context = MagicMock(return_value={})
@@ -454,3 +463,399 @@ def test_find_pagination_in_nested_value_detects_config_and_path() -> None:
     pagination_cfg, field_path = out
     assert pagination_cfg["page_info_path"] == "meta.page_info"
     assert field_path == "Paging.PageNo"
+
+
+# --- _resolve_parameter_values_list ---
+
+
+def test_resolve_parameter_values_list_context_scalar() -> None:
+    h = _bare_handler()
+    ic = RequestInputConfig(value="ignored", location="query")
+    assert h._resolve_parameter_values_list("x", ic, "api", "res", context={"x": 7}) == [7]
+
+
+def test_resolve_parameter_values_list_context_list() -> None:
+    h = _bare_handler()
+    ic = RequestInputConfig(value="ignored", location="query")
+    lst = [1, 2]
+    out = h._resolve_parameter_values_list("x", ic, "api", "res", context={"x": lst})
+    assert out == lst
+    assert out is lst
+
+
+def test_resolve_parameter_values_list_static_list_primitives() -> None:
+    h = _bare_handler()
+    ic = RequestInputConfig(value=[1, 2], location="query")
+    assert h._resolve_parameter_values_list("p", ic, "api", "res") == [1, 2]
+
+
+def test_resolve_parameter_values_list_static_list_dict_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    h = _bare_handler()
+    mock_nested = MagicMock(side_effect=lambda name, d: {"resolved": name, **d})
+    monkeypatch.setattr(h, "_resolve_nested_value_in_dict", mock_nested)
+    ic = RequestInputConfig(value=[{"a": 1}, {"b": 2}], location="query")
+    out = h._resolve_parameter_values_list("p", ic, "api", "res")
+    assert mock_nested.call_count == 2
+    assert out == [{"resolved": "p", "a": 1}, {"resolved": "p", "b": 2}]
+
+
+def test_resolve_parameter_values_list_parent_delegation() -> None:
+    h = _bare_handler()
+    ref = DynamicSourceReference(source="parent", field="id")
+    ic = RequestInputConfig(
+        value=ComplexDynamicValue(type=DynamicValueType.SOURCE, source_config=ref),
+        location="query",
+    )
+    h._resolve_from_parent_resource = MagicMock(return_value=[42])
+    out = h._resolve_parameter_values_list("pid", ic, "api", "child", filter_value="fv")
+    assert out == [42]
+    h._resolve_from_parent_resource.assert_called_once_with(
+        input_name="pid",
+        input_config=ic,
+        source_config=ref,
+        source_name="api",
+        resource_name="child",
+        filter_value="fv",
+    )
+
+
+def test_resolve_parameter_values_list_resolver_plain() -> None:
+    h = _bare_handler()
+    res = MagicMock()
+    res.resolve.return_value = "out"
+    h._current_value_resolver = res
+    ic = RequestInputConfig(value="static", location="query")
+    assert h._resolve_parameter_values_list("p", ic, "api", "res") == ["out"]
+    res.resolve.assert_called_once_with("static")
+
+
+def test_resolve_parameter_values_list_resolver_none_empty() -> None:
+    h = _bare_handler()
+    res = MagicMock()
+    res.resolve.return_value = None
+    h._current_value_resolver = res
+    ic = RequestInputConfig(value="x", location="query")
+    assert h._resolve_parameter_values_list("p", ic, "api", "res") == []
+
+
+def test_resolve_parameter_values_list_resolver_list_passthrough() -> None:
+    h = _bare_handler()
+    res = MagicMock()
+    res.resolve.return_value = [1, 2]
+    h._current_value_resolver = res
+    ic = RequestInputConfig(value="x", location="query")
+    assert h._resolve_parameter_values_list("p", ic, "api", "res") == [1, 2]
+
+
+def test_resolve_parameter_values_list_resolver_dict_nested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    h = _bare_handler()
+    res = MagicMock()
+    res.resolve.return_value = {"a": 1}
+    h._current_value_resolver = res
+    nested = MagicMock(return_value={"nested": True})
+    monkeypatch.setattr(h, "_resolve_nested_value_in_dict", nested)
+    ic = RequestInputConfig(value="x", location="query")
+    out = h._resolve_parameter_values_list("p", ic, "api", "res")
+    nested.assert_called_once_with("p", {"a": 1})
+    assert out == [{"nested": True}]
+
+
+def test_resolve_parameter_values_list_body_jinja_deferred() -> None:
+    h = _bare_handler()
+    res = MagicMock()
+    h._current_value_resolver = res
+    ic = RequestInputConfig(value="{{ ts }}", location="body")
+    out = h._resolve_parameter_values_list("p", ic, "api", "res", for_batch_expansion=False)
+    assert out == ["{{ ts }}"]
+    res.resolve.assert_not_called()
+
+
+def test_resolve_parameter_values_list_batch_expansion_calls_resolve() -> None:
+    h = _bare_handler()
+    res = MagicMock()
+    res.resolve.return_value = [1, 2, 3]
+    h._current_value_resolver = res
+    ic = RequestInputConfig(value="{{ ts }}", location="body")
+    out = h._resolve_parameter_values_list("p", ic, "api", "res", for_batch_expansion=True)
+    assert out == [1, 2, 3]
+    res.resolve.assert_called_once_with("{{ ts }}")
+
+
+def test_resolve_parameter_values_list_source_miswired() -> None:
+    h = _bare_handler()
+    ic = RequestInputConfig(
+        value=ComplexDynamicValue(type=DynamicValueType.SOURCE, source_config=None),
+        location="query",
+    )
+    h._current_value_resolver = MagicMock()
+    with pytest.raises(
+        HandlerError,
+        match="SOURCE type dynamic value should be handled via source_config",
+    ):
+        h._resolve_parameter_values_list("p", ic, "api", "res")
+
+
+def test_resolve_parameter_values_list_no_value_no_parent() -> None:
+    h = _bare_handler()
+    ic = SimpleNamespace(value=None, is_static_list=lambda: False, get_source_config=lambda: None)
+    with pytest.raises(HandlerError, match="No source or value defined"):
+        h._resolve_parameter_values_list("p", ic, "api", "res")
+
+
+# --- _resolve_resource_header_values ---
+
+
+def _handler_for_header_resolution() -> DynamicHandler:
+    h = _bare_handler()
+    h.spark = MagicMock()
+    return h
+
+
+def _source_header_token(
+    field: str = "tok", source: str = "parent", filt=None
+) -> ComplexDynamicValue:
+    return ComplexDynamicValue(
+        type=DynamicValueType.SOURCE,
+        source_config=DynamicSourceReference(source=source, field=field, filter=filt),
+    )
+
+
+@pytest.fixture
+def _restore_isinstance():
+    real = builtins.isinstance
+    yield
+    builtins.isinstance = real
+
+
+def test_get_value_resolver_prefers_current_cycle_resolver() -> None:
+    h = _handler_for_header_resolution()
+    custom = MagicMock(name="cycle_resolver")
+    h._current_value_resolver = custom
+    assert h._get_value_resolver() is custom
+
+
+def test_get_value_resolver_falls_back_to_module_get_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    h = _handler_for_header_resolution()
+    assert getattr(h, "_current_value_resolver", None) is None
+    fallback = MagicMock(name="fallback_resolver")
+    monkeypatch.setattr(
+        "src.handler.dynamic_handler.get_resolver",
+        lambda rc: fallback if rc is h.redis_context else None,
+    )
+    assert h._get_value_resolver() is fallback
+
+
+def test_resolve_resource_header_values_non_source_uses_shared_resolver() -> None:
+    h = _handler_for_header_resolution()
+    res = MagicMock()
+    res.resolve.return_value = "resolved-plain"
+    h._current_value_resolver = res
+    out = h._resolve_resource_header_values(
+        {"X-Plain": "application/json"},
+        source_name="api",
+        resource_name="child",
+    )
+    assert out == {"X-Plain": "resolved-plain"}
+    res.resolve.assert_called_once_with("application/json")
+
+
+@pytest.mark.parametrize(
+    ("redis_payload", "match"),
+    [
+        ([], "Invalid list data format"),
+        ([123], "Invalid list data format"),
+    ],
+)
+def test_resolve_resource_header_values_list_invalid_format(
+    redis_payload: list, match: str
+) -> None:
+    h = _handler_for_header_resolution()
+    h.redis_context.get.return_value = redis_payload
+    headers = {"X-Auth": _source_header_token()}
+    with pytest.raises(HandlerError, match=match):
+        h._resolve_resource_header_values(headers, source_name="api", resource_name="child")
+
+
+def test_resolve_resource_header_values_redis_miss_raises() -> None:
+    h = _handler_for_header_resolution()
+    h.redis_context.get.return_value = None
+    with pytest.raises(HandlerError, match="Required data from parent ref"):
+        h._resolve_resource_header_values(
+            {"X-Auth": _source_header_token()},
+            source_name="api",
+            resource_name="child",
+        )
+
+
+def test_resolve_resource_header_values_list_success() -> None:
+    h = _handler_for_header_resolution()
+    h.redis_context.get.return_value = [{"tok": "secret-token"}]
+    out = h._resolve_resource_header_values(
+        {"Authorization": _source_header_token(field="tok")},
+        source_name="api",
+        resource_name="child",
+    )
+    assert out == {"Authorization": "secret-token"}
+    h.redis_context.get.assert_called_once_with("pipeline:api:parent", spark=h.spark)
+
+
+def test_resolve_resource_header_values_list_missing_field_wraps_handler_error() -> None:
+    h = _handler_for_header_resolution()
+    h.redis_context.get.return_value = [{"other": 1}]
+    with pytest.raises(HandlerError, match="Failed to resolve header"):
+        h._resolve_resource_header_values(
+            {"X-Auth": _source_header_token(field="tok")},
+            source_name="api",
+            resource_name="child",
+        )
+
+
+def test_resolve_resource_header_values_unsupported_parent_type_raises() -> None:
+    h = _handler_for_header_resolution()
+    h.redis_context.get.return_value = "not-list-or-dataframe"
+    with pytest.raises(HandlerError, match="Unsupported data type"):
+        h._resolve_resource_header_values(
+            {"X-Auth": _source_header_token()},
+            source_name="api",
+            resource_name="child",
+        )
+
+
+def test_resolve_resource_header_values_dataframe_branch(
+    monkeypatch: pytest.MonkeyPatch, _restore_isinstance
+) -> None:
+    h = _handler_for_header_resolution()
+    sentinel = MagicMock(name="fake_df")
+    sentinel.columns = ["tok"]
+    post_null = MagicMock()
+    post_null.select.return_value.collect.return_value = [{"tok": "from-df"}]
+    sentinel.filter.return_value = post_null
+
+    real_isinstance = builtins.isinstance
+
+    def isinstance_shim(obj, cls):
+        if obj is sentinel and cls is SparkDataFrame:
+            return True
+        return real_isinstance(obj, cls)
+
+    monkeypatch.setattr(builtins, "isinstance", isinstance_shim)
+    monkeypatch.setattr(
+        "src.handler.dynamic_handler.col", lambda *_a, **_k: MagicMock(name="col_expr")
+    )
+    h.redis_context.get.return_value = sentinel
+
+    out = h._resolve_resource_header_values(
+        {"X-Tok": _source_header_token(field="tok")},
+        source_name="api",
+        resource_name="child",
+    )
+    assert out == {"X-Tok": "from-df"}
+
+
+def test_resolve_resource_header_values_dataframe_missing_column_wraps(
+    monkeypatch: pytest.MonkeyPatch, _restore_isinstance
+) -> None:
+    h = _handler_for_header_resolution()
+    sentinel = MagicMock(name="fake_df")
+    sentinel.columns = ["other"]
+
+    real_isinstance = builtins.isinstance
+
+    def isinstance_shim(obj, cls):
+        if obj is sentinel and cls is SparkDataFrame:
+            return True
+        return real_isinstance(obj, cls)
+
+    monkeypatch.setattr(builtins, "isinstance", isinstance_shim)
+    monkeypatch.setattr(
+        "src.handler.dynamic_handler.col", lambda *_a, **_k: MagicMock(name="col_expr")
+    )
+    h.redis_context.get.return_value = sentinel
+
+    with pytest.raises(HandlerError, match="Failed to resolve header"):
+        h._resolve_resource_header_values(
+            {"X-Tok": _source_header_token(field="tok")},
+            source_name="api",
+            resource_name="child",
+        )
+
+
+def test_resolve_resource_header_values_dataframe_empty_after_null_filter_raises(
+    monkeypatch: pytest.MonkeyPatch, _restore_isinstance
+) -> None:
+    h = _handler_for_header_resolution()
+    sentinel = MagicMock(name="fake_df")
+    sentinel.columns = ["tok"]
+    post_null = MagicMock()
+    post_null.select.return_value.collect.return_value = []
+    sentinel.filter.return_value = post_null
+
+    real_isinstance = builtins.isinstance
+
+    def isinstance_shim(obj, cls):
+        if obj is sentinel and cls is SparkDataFrame:
+            return True
+        return real_isinstance(obj, cls)
+
+    monkeypatch.setattr(builtins, "isinstance", isinstance_shim)
+    monkeypatch.setattr(
+        "src.handler.dynamic_handler.col", lambda *_a, **_k: MagicMock(name="col_expr")
+    )
+    h.redis_context.get.return_value = sentinel
+
+    with pytest.raises(HandlerError, match="No values found in field"):
+        h._resolve_resource_header_values(
+            {"X-Tok": _source_header_token(field="tok")},
+            source_name="api",
+            resource_name="child",
+        )
+
+
+def test_resolve_resource_header_values_applies_filter_before_extracting_from_dataframe(
+    monkeypatch: pytest.MonkeyPatch, _restore_isinstance
+) -> None:
+    h = _handler_for_header_resolution()
+    filt = FilterConfig(
+        type=FilterType.COLUMN,
+        field="status",
+        operator=FilterOperator.EQUALS,
+        value_source="active",
+        value_type="static",
+    )
+    sentinel = MagicMock(name="fake_df_before_filter")
+    filtered = MagicMock(name="after_parameter_filter")
+    filtered.columns = ["tok"]
+    post_null = MagicMock()
+    post_null.select.return_value.collect.return_value = [{"tok": "filtered-val"}]
+    filtered.filter.return_value = post_null
+
+    real_isinstance = builtins.isinstance
+
+    def isinstance_shim(obj, cls):
+        if obj is sentinel and cls is SparkDataFrame:
+            return True
+        return real_isinstance(obj, cls)
+
+    monkeypatch.setattr(builtins, "isinstance", isinstance_shim)
+    monkeypatch.setattr(
+        "src.handler.dynamic_handler.col", lambda *_a, **_k: MagicMock(name="col_expr")
+    )
+    h.redis_context.get.return_value = sentinel
+    h._apply_parameter_filter = MagicMock(return_value=filtered)  # type: ignore[method-assign]
+
+    out = h._resolve_resource_header_values(
+        {"X-Tok": _source_header_token(field="tok", filt=filt)},
+        source_name="api",
+        resource_name="child",
+    )
+    assert out == {"X-Tok": "filtered-val"}
+    h._apply_parameter_filter.assert_called_once()
+    call_kw = h._apply_parameter_filter.call_args.kwargs
+    assert call_kw["df"] is sentinel
+    assert call_kw["filter_config"] is filt

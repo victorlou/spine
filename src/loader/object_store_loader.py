@@ -5,11 +5,9 @@ Loader for object storage destinations (S3, GCS, Azure Blob, local) using Spark.
 import time
 import uuid
 from datetime import UTC, datetime
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from delta.tables import DeltaTable
-from pyspark.sql import Column, DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig, LoadingFormat
@@ -17,46 +15,7 @@ from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
 from src.loader.base_loader import BaseLoader
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.exceptions import LoaderError
-from src.utils.logger import get_logger
-
-# Common transient I/O error substrings across S3, GCS, and Azure storage drivers.
-_TRANSIENT_STORAGE_ERRORS = (
-    "Connection reset",
-    "SocketException",
-    "SocketTimeoutException",
-    "RequestTimeout",
-    "ServiceUnavailable",
-    "SlowDown",
-)
-
-
-def retry_on_transient_storage_error(max_retries: int = 3, delay: float = 1.0):
-    """Retry decorator for transient object storage I/O errors."""
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception = None
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-                    if any(pattern in str(e) for pattern in _TRANSIENT_STORAGE_ERRORS):
-                        if attempt < max_retries - 1:
-                            logger = get_logger(func.__name__)
-                            logger.warning(
-                                f"Storage operation failed (attempt {attempt + 1}/{max_retries}). "
-                                f"Retrying in {delay} seconds..."
-                            )
-                            time.sleep(delay)
-                            continue
-                    raise
-            raise last_exception
-
-        return wrapper
-
-    return decorator
+from src.utils.s3_transient_retry import retry_on_transient_storage_error
 
 
 class ObjectStoreLoader(BaseLoader):
@@ -137,87 +96,6 @@ class ObjectStoreLoader(BaseLoader):
         key = f"{timestamp}_{unique_id}.{extension}"
         final = self.object_store.resolve_path(base_uri, clean_prefix, key)
         return final, key
-
-    def _get_source_type_prefix(self, source_type: Optional[str]) -> str:
-        """
-        Get the prefix path segment for a given source type.
-
-        Maps source types to their storage prefixes:
-        - "rest_api" -> "rest_api"
-        - "python_sdk" -> "python_sdk"
-        - Other types can be added as needed
-
-        Args:
-            source_type: Source type (e.g., "rest_api", "python_sdk")
-
-        Returns:
-            str: Source type prefix (e.g., "rest_api", "python_sdk") or empty string if not recognized
-        """
-        if not source_type:
-            return ""
-
-        type_key = source_type.value if hasattr(source_type, "value") else str(source_type)
-
-        # Map source types to their storage prefixes
-        source_type_mapping = {
-            "rest_api": "rest_api",
-            "python_sdk": "sdk",
-            "postgresql": "database",
-            "hana": "database",
-        }
-
-        return source_type_mapping.get(type_key, "")
-
-    def _prepend_source_type_prefix(self, prefix: Optional[str], source_type: Optional[str]) -> str:
-        """
-        Prepend source type prefix to the given prefix.
-
-        Args:
-            prefix: Optional original prefix
-            source_type: Source type (e.g., "rest_api", "python_sdk")
-
-        Returns:
-            str: Prefix with source type prepended (e.g., "rest_api/roundel_ads/accounts", "python_sdk/databricks/...")
-        """
-        source_type_prefix = self._get_source_type_prefix(source_type)
-
-        if not source_type_prefix:
-            return prefix or ""
-
-        # Clean both prefixes
-        source_type_prefix = source_type_prefix.strip("/")
-        clean_prefix = prefix.strip("/") if prefix else ""
-
-        if clean_prefix:
-            return f"{source_type_prefix}/{clean_prefix}"
-        else:
-            return source_type_prefix
-
-    def _generate_table_path(
-        self, base_uri: str, prefix: Optional[str], source_type: Optional[str] = None
-    ) -> str:
-        """
-        Generate a table path for directory-based table formats.
-
-        Table formats such as Delta and Iceberg are stored as directories containing
-        data files and format-specific metadata. This method returns the directory
-        path where the table will be stored. The source type prefix is prepended
-        automatically.
-
-        Args:
-            base_uri: Filesystem base URI
-            prefix: Optional key prefix
-            source_type: Optional source type to prepend to the path
-
-        Returns:
-            str: Table directory path
-        """
-        full_prefix = self._prepend_source_type_prefix(prefix, source_type)
-        clean_prefix = full_prefix.strip("/") if full_prefix else ""
-
-        if clean_prefix:
-            return self.object_store.resolve_path(base_uri, clean_prefix, trailing_slash=True)
-        return self.object_store.resolve_path(base_uri, trailing_slash=True)
 
     def _ensure_dataframe(
         self, data: Union[DataFrame, List[Dict[str, Any]]], schema: Optional[StructType] = None
@@ -337,19 +215,6 @@ class ObjectStoreLoader(BaseLoader):
                 },
             )
             raise LoaderError(error_msg) from e
-
-    def _optimize_dataframe(self, df: DataFrame) -> DataFrame:
-        """
-        Apply optimizations to the DataFrame before writing.
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame: Optimized DataFrame
-        """
-        # Coalesce to single file for consistent output
-        return df.coalesce(1)
 
     def _get_iceberg_table_identifier(self, path: str, iceberg_warehouse_path: str) -> str:
         """
@@ -539,8 +404,7 @@ class ObjectStoreLoader(BaseLoader):
             },
         )
 
-        # Ensure we have a DataFrame
-        df = self._ensure_dataframe(data, schema)
+        df = self._prepare_dataframe_for_load(data, schema, config)
 
         # Branch based on format type
         if config.format == LoadingFormat.DELTA:
@@ -647,135 +511,6 @@ class ObjectStoreLoader(BaseLoader):
             source_type=source_type,
         )
         return self._table_exists(path, config.format)
-
-    def _perform_delta_merge(
-        self, df: DataFrame, delta_path: str, merge_keys: List[str], config: LoadingConfig
-    ) -> None:
-        """
-        Perform Delta Lake MERGE operation (upsert).
-
-        Matched rows: updates only columns present in both source and target (merge keys
-        excluded from the update set). This avoids failures when the source schema is
-        narrower than the table (e.g. upstream dropped a column that still exists in Delta).
-
-        Unmatched rows: inserts all target columns; source columns supply values, and
-        columns only on the target get typed NULL so the insert clause resolves.
-
-        Target schema is read via DeltaTable.toDF() for column names and types. Append /
-        overwrite paths still use mergeSchema for new columns from the source.
-
-        Args:
-            df: Source DataFrame with data to merge
-            delta_path: Path to the Delta table
-            merge_keys: List of column names to use as primary keys for matching
-            config: Loading configuration
-
-        Raises:
-            LoaderError: If merge operation fails or merge keys are invalid
-        """
-        if DeltaTable is None:
-            raise LoaderError(
-                "DeltaTable is not available. Please ensure delta-spark is installed."
-            )
-
-        # Validate that all merge keys exist in the DataFrame
-        df_columns_lower = {col.lower() for col in df.columns}
-        missing_keys = [key for key in merge_keys if key.lower() not in df_columns_lower]
-        if missing_keys:
-            raise LoaderError(
-                f"Merge keys not found in DataFrame: {missing_keys}. "
-                f"Available columns: {df.columns}"
-            )
-
-        if not self.spark:
-            raise LoaderError("Spark session not set. Call set_spark_session first.")
-
-        try:
-            # Load the target Delta table
-            delta_table = DeltaTable.forPath(self.spark, delta_path)
-            target_df = delta_table.toDF()
-
-            # 1. Create a mapping of lowercase source columns to their exact original casing
-            source_cols_map = {col.lower(): col for col in df.columns}
-
-            # Build merge condition using the exact casing from the source dataframe
-            # Format: "target.key1 = updates.key1 AND target.key2 = updates.key2 ..."
-            merge_conditions = [
-                f"target.`{key}` = updates.`{source_cols_map[key.lower()]}`" for key in merge_keys
-            ]
-            merge_condition = " AND ".join(merge_conditions)
-
-            target_schema: Dict[str, Any] = {
-                field.name: field.dataType for field in target_df.schema.fields
-            }
-            target_columns: List[str] = list(target_schema.keys())
-            merge_keys_lower = {key.lower() for key in merge_keys}
-
-            update_set: Dict[str, Union[str, Column]] = {}
-            insert_values: Dict[str, Union[str, Column]] = {}
-
-            # 2. Build the sets using case-agnostic lookups
-            for target_col in target_columns:
-                target_col_lower = target_col.lower()
-
-                # Case-agnostic check: Does the target column exist in the source dataframe?
-                if target_col_lower in source_cols_map:
-                    # Key present in both source and target. Add to update_set and insert_values.
-                    # Match found! Fetch the exact source column name to build the SQL expression
-                    source_col_exact = source_cols_map[target_col_lower]
-
-                    insert_values[target_col] = f"updates.`{source_col_exact}`"
-
-                    # Need to update this column if this merge_key already exists in table
-                    if target_col_lower not in merge_keys_lower:
-                        update_set[target_col] = f"updates.`{source_col_exact}`"
-
-                else:
-                    # No match found. Inject a typed NULL for inserts so new rows don't fail.
-                    data_type = target_schema[target_col].simpleString()
-                    insert_values[target_col] = f"CAST(NULL AS {data_type})"
-
-            self.logger.debug(
-                "Performing Delta MERGE operation",
-                extra_fields={
-                    "delta_path": delta_path,
-                    "merge_keys": merge_keys,
-                    "merge_condition": merge_condition,
-                    "source_column_count": len(df.columns),
-                    "shared_columns": list(update_set.keys()),
-                    "insert_columns": list(insert_values.keys()),
-                },
-            )
-
-            # Perform MERGE: update matched rows for shared columns only and insert all
-            # target columns using typed NULLs for columns missing from the source.
-            merge_builder = delta_table.alias("target").merge(
-                source=df.alias("updates"), condition=merge_condition
-            )
-
-            # Shared non-key columns only (intersection); avoids referencing missing source columns.
-            if update_set:
-                merge_builder = merge_builder.whenMatchedUpdate(set=update_set)
-
-            # Full target row on insert; typed NULL where the source has no column.
-            merge_builder.whenNotMatchedInsert(values=insert_values).execute()
-
-            self.logger.info(
-                "Delta MERGE operation completed successfully",
-                extra_fields={"delta_path": delta_path, "merge_keys": merge_keys},
-            )
-
-        except Exception as e:
-            error_msg = f"Failed to perform Delta MERGE operation: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "delta_path": delta_path,
-                    "merge_keys": merge_keys,
-                },
-            )
-            raise LoaderError(error_msg) from e
 
     def _perform_iceberg_merge(
         self,
@@ -918,6 +653,55 @@ class ObjectStoreLoader(BaseLoader):
                     self.spark.catalog.dropTempView(source_view)
                 except Exception:
                     pass
+
+    def _prepare_dataframe_for_load(
+        self,
+        data: Union[DataFrame, List[Dict[str, Any]]],
+        schema: Optional[StructType],
+        config: LoadingConfig,
+    ) -> DataFrame:
+        """
+        Convert load input to a DataFrame and apply shared preprocessing before any
+        format-specific load strategy runs.
+
+        This keeps column cleanup and optional merge-key deduplication consistent for
+        Delta, Iceberg, and file-based writes.
+        """
+        df = self._ensure_dataframe(data, schema)
+        df = self._prepare_dataframe_columns(df)
+
+        # Force deduplicate on merge keys if configured, to avoid non-deterministic
+        # merge failures due to duplicate keys in source data. This is a temporary
+        # workaround until merge logic can handle duplicate keys deterministically.
+        if config.force_nondeterministic_deduplication and config.write_mode == "merge":
+            self.logger.warning("Forcing non-deterministic deduplication...")
+
+            df = df.dropDuplicates(config.merge_keys)
+
+            self.logger.info(f"Source rows after deduplication: {df.count()}")
+
+        return df
+
+    def _prepare_dataframe_columns(self, df: DataFrame) -> DataFrame:
+        """
+        Sanitize, normalize, and deduplicate column names to prevent write failures
+        from illegal characters or duplicate names across all load strategies.
+        """
+        df = self._rename_duplicate_columns(df)
+
+        self.logger.trace(
+            "DataFrame after handling duplicate columns",
+            extra_fields={"columns": df.columns},
+        )
+
+        df = self._sanitize_column_names(df)
+
+        self.logger.trace(
+            "DataFrame after sanitizing column names",
+            extra_fields={"columns": df.columns},
+        )
+
+        return df
 
     def _sanitize_column_names(self, df: DataFrame) -> DataFrame:
         """
@@ -1065,31 +849,6 @@ class ObjectStoreLoader(BaseLoader):
             LoaderError: If loading fails or configuration is invalid
         """
         try:
-            # Handle duplicate column names by renaming them to unique names
-            df = self._rename_duplicate_columns(df)
-
-            self.logger.trace(
-                "DataFrame after handling duplicate columns",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Sanitize column names before writing table-backed formats
-            df = self._sanitize_column_names(df)
-
-            self.logger.trace(
-                "DataFrame after sanitizing column names",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Force deduplicate on merge keys if configured to avoid non-deterministic
-            # upserts when the source contains duplicate keys.
-            if config.force_nondeterministic_deduplication and config.write_mode == "merge":
-                self.logger.warning("Forcing non-deterministic deduplication...")
-
-                df = df.dropDuplicates(config.merge_keys)
-
-                self.logger.info(f"Source rows after deduplication: {df.count()}")
-
             # Generate Iceberg table path (directory-based)
             final_path = self._generate_table_path(
                 base_uri=base_uri, prefix=config.prefix, source_type=source_type
@@ -1246,115 +1005,8 @@ class ObjectStoreLoader(BaseLoader):
             LoaderError: If loading fails or configuration is invalid
         """
         try:
-            # Handle duplicate column names by renaming them to unique names
-            df = self._rename_duplicate_columns(df)
-
-            self.logger.trace(
-                "DataFrame after handling duplicate columns",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Sanitize column names to handle illegal characters for Delta Lake
-            df = self._sanitize_column_names(df)
-
-            self.logger.trace(
-                "DataFrame after sanitizing column names",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Force deduplicate on merge keys if configured, to avoid non-deterministic merge failures due to duplicate keys in source data. This is a temporary workaround until we implement proper merge logic for Delta that can handle duplicates without failure.
-            if config.force_nondeterministic_deduplication and config.write_mode == "merge":
-                self.logger.warning("Forcing non-deterministic deduplication...")
-
-                df = df.dropDuplicates(config.merge_keys)
-
-                self.logger.info(f"Source rows after deduplication: {df.count()}")
-
-            # Generate table path (directory-based)
-            # Source type prefix is automatically prepended
-            final_path = self._generate_table_path(
-                base_uri=base_uri, prefix=config.prefix, source_type=source_type
-            )
-
-            self.logger.trace(
-                "Writing Delta table",
-                extra_fields={
-                    "delta_path": final_path,
-                    "write_mode": config.write_mode,
-                    "has_merge_keys": config.merge_keys is not None,
-                },
-            )
-
-            # Handle different write modes
-            if config.write_mode == "merge":
-                # Merge mode: Use Delta Lake MERGE operation for upsert
-                # Check if table exists - if not, create it first using append mode
-                if not self._table_exists(final_path, LoadingFormat.DELTA):
-                    self.logger.debug(
-                        "Delta table does not exist, creating it first",
-                        extra_fields={"delta_path": final_path},
-                    )
-                    # Create table using append mode (first write)
-                    # This ensures schema evolution is enabled
-                    write_options = {
-                        "format": LoadingFormat.DELTA,
-                        "mode": "append",
-                        "mergeSchema": "true",  # Enable schema evolution
-                    }
-                    if config.compression:
-                        write_options["compression"] = config.compression
-                    self._write_dataframe(df, final_path, write_options)
-                else:
-                    # Perform merge operation
-                    if config.merge_keys is None:
-                        raise LoaderError("merge_keys must be provided when write_mode is 'merge'")
-
-                    self._perform_delta_merge(df, final_path, config.merge_keys, config)
-
-            elif config.write_mode == "append":
-                # Append mode: Add new data without removing existing data
-                # Schema evolution is enabled to allow new columns
-                write_options = {
-                    "format": LoadingFormat.DELTA,
-                    "mode": "append",
-                    "mergeSchema": "true",  # Enable schema evolution
-                    **kwargs.get("write_options", {}),
-                }
-                # Compression is handled differently for Delta
-                # Delta uses Parquet files internally, so compression can be set
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                # Write directly to final location (Delta manages its own files)
-                self._write_dataframe(df, final_path, write_options)
-
-            else:
-                # Overwrite mode (default) or other modes: Use standard write
-                # Schema evolution is enabled to allow new columns
-                write_options = {
-                    "format": LoadingFormat.DELTA,
-                    "mode": config.write_mode,
-                    "mergeSchema": "true",  # Enable schema evolution
-                    **kwargs.get("write_options", {}),
-                }
-                # Compression is handled differently for Delta
-                # Delta uses Parquet files internally, so compression can be set
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                # Write directly to final location (Delta manages its own files)
-                self._write_dataframe(df, final_path, write_options)
-
-            self.logger.info(
-                "Successfully loaded Delta table",
-                extra_fields={
-                    "destination": final_path,
-                    "write_mode": config.write_mode,
-                    "merge_keys": config.merge_keys if config.write_mode == "merge" else None,
-                },
-            )
-
-            return final_path
+            # return final_path
+            pass
 
         except Exception as e:
             error_msg = f"Failed to load Delta table: {e!s}"

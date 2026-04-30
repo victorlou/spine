@@ -64,7 +64,7 @@ def test_wait_for_completion_timeout_preserves_last_response(
         SimpleNamespace(now=_now),
     )
     monkeypatch.setattr("src.utils.snapshot_poller.time.sleep", lambda _s: None)
-    with pytest.raises(SnapshotTimeoutError) as excinfo:
+    with pytest.raises(SnapshotTimeoutError, match="did not complete") as excinfo:
         poller.wait_for_completion({})
     assert excinfo.value.last_response == {"status": "pending"}
 
@@ -106,7 +106,7 @@ def test_wait_for_completion_backoff_uses_max_interval(monkeypatch: pytest.Monke
     )
     sleeps: list[float] = []
     monkeypatch.setattr("src.utils.snapshot_poller.time.sleep", lambda s: sleeps.append(s))
-    with pytest.raises(SnapshotTimeoutError):
+    with pytest.raises(SnapshotTimeoutError, match="did not complete"):
         poller.wait_for_completion({})
     assert sleeps and all(s <= 2 for s in sleeps)
 

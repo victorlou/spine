@@ -12,10 +12,6 @@ from src.utils.spark_manager import SparkManager
 
 
 def test_spark_manager_construction_does_not_eagerly_load_aws_credentials(monkeypatch) -> None:
-    # Ensure singleton state is clean for this test
-    SparkManager._instance = None
-    SparkManager._spark = None
-
     def _raise_if_called(self):
         raise AssertionError("_load_credentials should not be called during __new__")
 
@@ -33,9 +29,6 @@ def test_spark_manager_init_session_fails_fast_when_aws_credentials_fail(monkeyp
     src.loader.destination_preflight is the single source of truth for "can we reach the
     bucket"; the credential loader is no longer optional when S3 is in scope.
     """
-    SparkManager._instance = None
-    SparkManager._spark = None
-
     manager = SparkManager()
 
     def _raise_spark_error():
@@ -70,14 +63,8 @@ def test_spark_manager_init_session_fails_fast_when_aws_credentials_fail(monkeyp
 
     assert manager._spark is None
 
-    SparkManager._instance = None
-    SparkManager._spark = None
-
 
 def test_spark_manager_skips_aws_credentials_when_s3_not_requested(monkeypatch) -> None:
-    SparkManager._instance = None
-    SparkManager._spark = None
-
     manager = SparkManager()
 
     def _raise_if_called():
@@ -109,12 +96,8 @@ def test_spark_manager_skips_aws_credentials_when_s3_not_requested(monkeypatch) 
     rt = resolve_spark_runtime(SparkRuntimeConfig())
     assert manager.init_session(destinations={"local"}, spark_runtime=rt) is not None
 
-    manager._spark = None
-    SparkManager._instance = None
-
 
 def test_load_credentials_maps_manager_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    SparkManager._instance = None
     mgr = SparkManager()
 
     fake_cm = MagicMock()
@@ -135,7 +118,6 @@ def test_load_credentials_maps_manager_payload(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_load_credentials_wraps_aws_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    SparkManager._instance = None
     mgr = SparkManager()
 
     fake_cm = MagicMock()
@@ -149,13 +131,11 @@ def test_load_credentials_wraps_aws_error(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_get_s3_path_helper() -> None:
-    SparkManager._instance = None
     mgr = SparkManager()
     assert mgr.get_s3_path("mybucket", "path/to/o") == "s3a://mybucket/path/to/o"
 
 
 def test_resolve_spark_runtime_falls_back_to_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    SparkManager._instance = None
     mgr = SparkManager()
     resolved = resolve_spark_runtime(SparkRuntimeConfig())
     monkeypatch.setattr(
@@ -174,9 +154,6 @@ def test_resolve_spark_runtime_falls_back_to_settings(monkeypatch: pytest.Monkey
 
 
 def test_init_session_applies_multiple_builder_configs(monkeypatch: pytest.MonkeyPatch) -> None:
-    SparkManager._instance = None
-    SparkManager._spark = None
-
     manager = SparkManager()
     monkeypatch.setattr(manager, "_load_credentials", lambda: None)
     monkeypatch.setattr(
@@ -211,7 +188,6 @@ def test_init_session_applies_multiple_builder_configs(monkeypatch: pytest.Monke
 
 
 def test_get_session_and_stop_session() -> None:
-    SparkManager._instance = None
     mgr = SparkManager()
     assert mgr.get_session() is None
     fake_spark = Mock()

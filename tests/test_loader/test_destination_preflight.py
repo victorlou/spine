@@ -140,6 +140,7 @@ def test_preflight_destinations_wraps_list_failures_with_destination_context(
     assert "Cannot list destination" in str(err)
 
 
+@pytest.mark.slow
 def test_preflight_destinations_times_out_filesystem_get(monkeypatch: pytest.MonkeyPatch) -> None:
     fs = _FakeFs()
     spark = _build_fake_spark(fs)

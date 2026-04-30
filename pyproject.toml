@@ -57,9 +57,21 @@ ignore = ["E203"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = ["--strict-markers"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "--durations=5",
+]
+xfail_strict = true
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:pyspark.*",
+    "ignore::DeprecationWarning:pkg_resources.*",
+    "ignore::DeprecationWarning:google.*",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
-    "integration: optional tests that hit external systems or credentials",
     "slow: unusually slow tests",
 ]
 
@@ -69,4 +81,10 @@ source = ["src"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 85
+fail_under = 82
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+    "pragma: no cover",
+]

@@ -488,7 +488,7 @@ def test_load_iceberg_unsets_warehouse_conf_on_write_error() -> None:
         write_mode="append",
         format="iceberg",
     )
-    with pytest.raises(LoaderError):
+    with pytest.raises(LoaderError, match="write failed"):
         loader._load_iceberg(df, cfg, base_uri="file:///wh")
     spark.conf.unset.assert_called_once_with("spark.sql.catalog.iceberg.warehouse")
 
@@ -527,7 +527,7 @@ def test_load_file_based_writes_to_temp_then_moves() -> None:
 def test_load_file_based_cleans_up_temp_on_write_error() -> None:
     loader, df = _file_based_loader(write_side_effect=LoaderError("disk full"))
     cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="s/r", write_mode="overwrite")
-    with pytest.raises(LoaderError):
+    with pytest.raises(LoaderError, match="disk full"):
         loader._load_file_based(df, cfg, base_uri="s3a://b")
     loader._cleanup_temp_dir.assert_called_once()
 

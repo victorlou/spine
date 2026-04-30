@@ -68,7 +68,9 @@ Thumbs.db
 .tmp/
 .pytest_cache/
 .coverage
+.coverage.*
 coverage.xml
+coverage_map.json
 
 # API Documentation and Development Notes
 .devnotes/

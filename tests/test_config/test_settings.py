@@ -14,6 +14,40 @@ from src.config.settings import (
     get_settings,
 )
 from src.utils.exceptions import ConfigError
+from tests.conftest import write_minimal_pipeline_config_dir
+
+_RETRY_DEFAULTS_BLOCK = (
+    'version: "1.0"\n'
+    "defaults:\n"
+    "  retry:\n"
+    "    max_attempts: 5\n"
+    "    initial_delay: 2.0\n"
+    "    backoff_factor: 3.0\n"
+    "  loading:\n"
+    '    destination: "local"\n'
+    '    format: "delta"\n'
+    '    write_mode: "overwrite"\n'
+    '    storage_root: ".spine/out"\n'
+    "  context:\n"
+    '    type: "redis"\n'
+    "    ttl: 3600\n"
+    '    prefix: "p:"\n'
+    "    redis: { host: localhost, port: 6379, db: 0 }\n"
+)
+
+_API_SOURCE_FILE = {
+    "api.yml": (
+        'type: "rest_api"\n'
+        'base_url: "https://ex.com"\n'
+        "resources: { u: { path: /u, method: GET, response_type: json } }\n"
+    ),
+}
+
+
+def _write_minimal_pipeline_config_dir(cfg_dir: Path) -> None:
+    write_minimal_pipeline_config_dir(
+        cfg_dir, defaults_yaml=_RETRY_DEFAULTS_BLOCK, sources=_API_SOURCE_FILE
+    )
 
 
 def test_settings_model_has_no_embedded_aws_field() -> None:
@@ -111,58 +145,7 @@ def test_databricks_settings_workspace_client_missing_credentials_wraps_config_e
         ds.initialize_databricks_workspace_client()
 
 
-def _write_minimal_pipeline_config_dir(cfg_dir: Path) -> None:
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "defaults.yml").write_text(
-        "\n".join(
-            [
-                'version: "1.0"',
-                "defaults:",
-                "  retry:",
-                "    max_attempts: 5",
-                "    initial_delay: 2.0",
-                "    backoff_factor: 3.0",
-                "  loading:",
-                '    destination: "local"',
-                '    format: "delta"',
-                '    write_mode: "overwrite"',
-                '    storage_root: ".spine/out"',
-                "  context:",
-                '    type: "redis"',
-                "    ttl: 3600",
-                '    prefix: "p:"',
-                "    redis: { host: localhost, port: 6379, db: 0 }",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    src = cfg_dir / "sources"
-    src.mkdir(exist_ok=True)
-    (src / "api.yml").write_text(
-        "\n".join(
-            [
-                'type: "rest_api"',
-                'base_url: "https://ex.com"',
-                "resources: { u: { path: /u, method: GET, response_type: json } }",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-@pytest.fixture
-def clear_settings_cache():
-    """Isolate get_settings cache between tests in this module."""
-    import src.config.settings as settings_mod
-
-    settings_mod._settings_cache.clear()
-    yield
-    settings_mod._settings_cache.clear()
-
-
-def test_settings_loads_pipeline_config_and_updates_api_retries(
-    tmp_path: Path, clear_settings_cache
-) -> None:
+def test_settings_loads_pipeline_config_and_updates_api_retries(tmp_path: Path) -> None:
     cfg_dir = tmp_path / "cfg"
     _write_minimal_pipeline_config_dir(cfg_dir)
     s = Settings(CONFIG_PATH=str(cfg_dir.resolve()))
@@ -173,7 +156,7 @@ def test_settings_loads_pipeline_config_and_updates_api_retries(
 
 
 def test_settings_load_config_wraps_non_config_exception(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clear_settings_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
     _write_minimal_pipeline_config_dir(cfg_dir)
@@ -191,7 +174,7 @@ def test_settings_load_config_wraps_non_config_exception(
 
 
 def test_settings_load_config_reraises_config_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clear_settings_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
     _write_minimal_pipeline_config_dir(cfg_dir)
@@ -207,9 +190,7 @@ def test_settings_load_config_reraises_config_error(
         Settings(CONFIG_PATH=str(cfg_dir.resolve()))
 
 
-def test_get_settings_cache_same_selection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clear_settings_cache
-) -> None:
+def test_get_settings_cache_same_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg_dir = tmp_path / "cfg"
     _write_minimal_pipeline_config_dir(cfg_dir)
     monkeypatch.setenv("CONFIG_PATH", str(cfg_dir.resolve()))
@@ -219,7 +200,7 @@ def test_get_settings_cache_same_selection(
 
 
 def test_get_settings_cache_distinct_for_different_selection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clear_settings_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
     _write_minimal_pipeline_config_dir(cfg_dir)

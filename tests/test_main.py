@@ -83,3 +83,56 @@ def test_main_cli_validate_only_returns_success_json(
     payload = _json_payload(result.output)
     assert payload["status"] == "success"
     assert payload["message"] == "Configuration validation successful"
+
+
+def test_main_cli_handles_keyboard_interrupt(monkeypatch, minimal_pipeline_config_dir) -> None:
+    monkeypatch.setenv("CONFIG_PATH", str(minimal_pipeline_config_dir))
+    monkeypatch.setattr(
+        main_module, "load_pipeline_dotenv", lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    monkeypatch.setattr(main_module, "process_environment_variables", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main_module.main, [])
+
+    assert result.exit_code == 130
+    payload = _json_payload(result.output)
+    assert payload["status"] == "interrupted"
+
+
+def test_main_cli_handles_graceful_shutdown(monkeypatch, minimal_pipeline_config_dir) -> None:
+    from src.utils.exceptions import GracefulShutdownError
+
+    monkeypatch.setenv("CONFIG_PATH", str(minimal_pipeline_config_dir))
+    monkeypatch.setattr(
+        main_module,
+        "load_pipeline_dotenv",
+        lambda: (_ for _ in ()).throw(GracefulShutdownError("sigterm")),
+    )
+    monkeypatch.setattr(main_module, "process_environment_variables", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main_module.main, [])
+
+    assert result.exit_code == 130
+    payload = _json_payload(result.output)
+    assert payload["status"] == "interrupted"
+    assert payload["message"] == "sigterm"
+
+
+def test_main_cli_handles_unknown_exception_to_stderr(
+    monkeypatch, minimal_pipeline_config_dir
+) -> None:
+    monkeypatch.setenv("CONFIG_PATH", str(minimal_pipeline_config_dir))
+    monkeypatch.setattr(
+        main_module,
+        "load_pipeline_dotenv",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(main_module, "process_environment_variables", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main_module.main, [])
+
+    assert result.exit_code == 1
+    assert '"type": "RuntimeError"' in result.output

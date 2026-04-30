@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.config.config_models import SourceType
+from src.config.config_models import SourceType, TableReadOptions
 from src.service.hana_service import HanaService
 from src.service.postgres_service import PostgresService
 from src.service.service_factory import ServiceFactory
@@ -97,3 +97,184 @@ def test_sql_database_service_guard_rails() -> None:
         svc.extract_table("public", "users", spark_session=None)
     with pytest.raises(ServiceError, match="Database sources use Spark extract_table"):
         svc.fetch_data("users")
+
+
+def test_hana_service_rejects_non_hana_source_type() -> None:
+    bad_cfg = _source("postgresql")
+    with pytest.raises(ServiceError, match="requires hana source type"):
+        HanaService(_settings(), "hana", bad_cfg, redis_context=object())
+
+
+def test_hana_connect_wraps_unexpected_validation_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    hana_cfg = _source("hana")
+    hana = HanaService(_settings(), "hana", hana_cfg, redis_context=object())
+    monkeypatch.setattr(
+        hana,
+        "_validate_host_and_port_for_connect",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(ServiceError, match="Failed to validate HANA connection settings"):
+        hana.connect()
+
+
+def test_hana_jdbc_url_filters_reserved_and_encodes_values() -> None:
+    hana_cfg = _source("hana")
+    hana_cfg.database = "analytics db"
+    hana_cfg.connection_params = {
+        "schema": "A B",
+        "user": "ignored",
+        "password": "ignored",
+        "driver": "ignored",
+    }
+    hana = HanaService(_settings(), "hana", hana_cfg, redis_context=object())
+
+    url = hana._jdbc_url
+    assert "databaseName=analytics+db" in url
+    assert "schema=A+B" in url
+    assert "user=" not in url
+    assert "password=" not in url
+    assert "driver=" not in url
+
+
+def test_hana_table_label_and_from_clause() -> None:
+    hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
+    assert hana._table_label_for_log("public", "users") == '"public"."users"'
+    assert hana._table_label_for_log("", "users") == '"users"'
+    assert hana._quoted_from_clause("public", "users") == '"public"."users"'
+
+
+@pytest.mark.parametrize(
+    "select_query,table_read_options,expected_kwargs",
+    [
+        ("SELECT 1", None, {"table": "SELECT 1"}),
+        (
+            None,
+            TableReadOptions(predicates=["id > 10"]),
+            {"predicates": ["id > 10"]},
+        ),
+        (
+            None,
+            TableReadOptions(
+                partition_column="id",
+                lower_bound=1,
+                upper_bound=100,
+                num_partitions=4,
+            ),
+            {"column": "id", "lowerBound": 1, "upperBound": 100, "numPartitions": 4},
+        ),
+        (None, None, {"table": '(SELECT * FROM "public"."users") AS data_query'}),
+    ],
+)
+def test_hana_load_dataframe_routes_by_options(
+    select_query, table_read_options, expected_kwargs
+) -> None:
+    hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
+    spark = MagicMock()
+    spark.read.jdbc.return_value = "df"
+
+    out = hana._load_dataframe(
+        spark, "public", "users", select_query, table_read_options=table_read_options
+    )
+    assert out == "df"
+    kwargs = spark.read.jdbc.call_args.kwargs
+    for key, value in expected_kwargs.items():
+        assert kwargs[key] == value
+
+
+def test_sql_extract_table_ensure_prerequisites_hook_runs() -> None:
+    class _Stub(SqlDatabaseService):
+        ensured = False
+
+        def _table_label_for_log(self, schema: str, table: str) -> str:
+            return f"{schema}.{table}"
+
+        def _load_dataframe(
+            self, spark_session, schema, table, select_query, table_read_options=None
+        ):
+            return MagicMock(count=lambda: 1)
+
+        def _ensure_extract_prerequisites(self) -> None:
+            self.ensured = True
+
+        def connect(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
+    svc.extract_table("public", "users", spark_session=MagicMock())
+    assert svc.ensured is True
+
+
+def test_sql_extract_table_raises_service_error_on_loader_exception() -> None:
+    class _Stub(SqlDatabaseService):
+        def _table_label_for_log(self, schema: str, table: str) -> str:
+            return f"{schema}.{table}"
+
+        def _load_dataframe(
+            self, spark_session, schema, table, select_query, table_read_options=None
+        ):
+            raise RuntimeError("jdbc failed")
+
+        def connect(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
+    with pytest.raises(ServiceError, match="Failed to extract data"):
+        svc.extract_table("public", "users", spark_session=MagicMock())
+
+
+def test_sql_extract_table_logs_without_count_when_disabled() -> None:
+    class _Stub(SqlDatabaseService):
+        def _table_label_for_log(self, schema: str, table: str) -> str:
+            return f"{schema}.{table}"
+
+        def _load_dataframe(
+            self, spark_session, schema, table, select_query, table_read_options=None
+        ):
+            return MagicMock(count=MagicMock(return_value=99))
+
+        def connect(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
+    df = svc.extract_table("public", "users", spark_session=MagicMock())
+    df.count.assert_not_called()
+
+
+def test_sql_extract_table_logs_exact_count_when_requested() -> None:
+    class _Stub(SqlDatabaseService):
+        def _table_label_for_log(self, schema: str, table: str) -> str:
+            return f"{schema}.{table}"
+
+        def _load_dataframe(
+            self, spark_session, schema, table, select_query, table_read_options=None
+        ):
+            return MagicMock(count=MagicMock(return_value=7))
+
+        def connect(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
+    read_opts = SimpleNamespace(
+        fetch_size=1000,
+        predicates=["id > 1"],
+        partition_column="id",
+        num_partitions=2,
+        log_exact_row_count=True,
+    )
+    df = svc.extract_table(
+        "public", "users", spark_session=MagicMock(), table_read_options=read_opts
+    )
+    df.count.assert_called_once()

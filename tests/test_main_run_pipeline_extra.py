@@ -151,3 +151,30 @@ def test_run_pipeline_pipeline_error_format(monkeypatch: pytest.MonkeyPatch) -> 
     )
     out = main_module.run_pipeline()
     assert out["status"] == "failed"
+
+
+def test_run_pipeline_unknown_error_uses_format_unknown_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(main_module, "set_root_log_level", lambda _lvl: None)
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda selection=None: SimpleNamespace(pipeline_config=SimpleNamespace(sources={})),
+    )
+
+    def boom():
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(
+        main_module,
+        "DynamicHandler",
+        lambda *a, **k: MagicMock(
+            validate=lambda: None,
+            execution_plan=MagicMock(summarize=lambda: {}),
+            handle=boom,
+        ),
+    )
+    out = main_module.run_pipeline()
+    assert out["status"] == "failed"
+    assert out["error"]["type"] == "RuntimeError"

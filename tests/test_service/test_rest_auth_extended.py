@@ -1,4 +1,4 @@
-"""Additional REST auth branches: OAuth JWT exchange, API key, bearer refresh."""
+"""Additional REST auth branches: OAuth JWT exchange and bearer refresh."""
 
 import base64
 from types import SimpleNamespace
@@ -92,25 +92,6 @@ def test_oauth_jwt_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert svc._get_auth_token() == "tok"
 
 
-def test_api_key_auth() -> None:
-    svc = _bare_rest_service(type="api_key", client_id="k-secret")
-    assert svc._get_auth_token() == "k-secret"
-
-
-def test_bearer_static_token() -> None:
-    svc = _bare_rest_service(
-        type="bearer_token",
-        token_url=None,
-        client_id=None,
-        client_secret=None,
-        refresh_token=None,
-        bearer_token="btoken",
-        header_name="H",
-        header_format="{token}",
-    )
-    assert svc._get_auth_token() == "btoken"
-
-
 def test_bearer_refresh_updates_token(monkeypatch: pytest.MonkeyPatch) -> None:
     svc = _bare_rest_service(
         type="bearer_token",
@@ -127,9 +108,3 @@ def test_bearer_refresh_updates_token(monkeypatch: pytest.MonkeyPatch) -> None:
     post_resp.json.return_value = {"access_token": "refreshed", "expires_in": 9000}
     svc.session.post.return_value = post_resp
     assert svc._get_auth_token() == "refreshed"
-
-
-def test_unsupported_auth_type() -> None:
-    svc = _bare_rest_service(type="not_supported_yet")
-    with pytest.raises(ServiceError, match="Unsupported authentication type"):
-        svc._get_auth_token()

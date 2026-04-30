@@ -398,3 +398,117 @@ def test_preflight_destinations_skips_disabled_and_unknown_destinations() -> Non
     preflight_destinations(spark, [None])
 
     assert not fs.list_calls
+
+
+@pytest.mark.parametrize(
+    "env_key,env_value",
+    [
+        ("FUNCTION_TARGET", "handler"),
+        ("FUNCTION_NAME", "worker"),
+        ("GAE_ENV", "standard"),
+        ("GKE_METADATA_HOST", "169.254.169.254"),
+    ],
+)
+def test_is_gcp_managed_identity_environment_signals_true(
+    monkeypatch: pytest.MonkeyPatch,
+    env_key: str,
+    env_value: str,
+) -> None:
+    clear_managed_platform_env(monkeypatch)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("FUNCTION_TARGET", raising=False)
+    monkeypatch.delenv("FUNCTION_NAME", raising=False)
+    monkeypatch.delenv("GAE_ENV", raising=False)
+    monkeypatch.delenv("GKE_METADATA_HOST", raising=False)
+    monkeypatch.setenv(env_key, env_value)
+
+    assert destination_preflight._is_gcp_managed_identity_environment() is True
+
+
+def test_is_gcp_managed_identity_environment_false_without_signals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_managed_platform_env(monkeypatch)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("FUNCTION_TARGET", raising=False)
+    monkeypatch.delenv("FUNCTION_NAME", raising=False)
+    monkeypatch.delenv("GAE_ENV", raising=False)
+    monkeypatch.delenv("GKE_METADATA_HOST", raising=False)
+
+    assert destination_preflight._is_gcp_managed_identity_environment() is False
+
+
+def test_filesystem_timeout_seconds_invalid_env_uses_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SPINE_DESTINATION_PREFLIGHT_FILESYSTEM_TIMEOUT_SECONDS", "bad-value")
+
+    assert (
+        destination_preflight._filesystem_timeout_seconds()
+        == destination_preflight._DEFAULT_FILESYSTEM_TIMEOUT_SECONDS
+    )
+
+
+def test_validate_google_credentials_json_file_rejects_empty_file(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty.json"
+    empty.write_text("   ", encoding="utf-8")
+
+    with pytest.raises(HandlerError, match="credential file is empty"):
+        destination_preflight._validate_google_credentials_json_file(empty, {"destination": "gcs"})
+
+
+def test_validate_google_credentials_json_file_rejects_non_object_json(
+    tmp_path: Path,
+) -> None:
+    non_object = tmp_path / "list.json"
+    non_object.write_text('["not-an-object"]', encoding="utf-8")
+
+    with pytest.raises(HandlerError, match="must be an object"):
+        destination_preflight._validate_google_credentials_json_file(
+            non_object, {"destination": "gcs"}
+        )
+
+
+def test_validate_google_credentials_json_file_wraps_read_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_path = Path("/unreadable/adc.json")
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("permission denied")),
+    )
+
+    with pytest.raises(HandlerError, match="Cannot read Google credential file"):
+        destination_preflight._validate_google_credentials_json_file(
+            fake_path, {"destination": "gcs"}
+        )
+
+
+def test_preflight_destinations_write_probe_cleanup_failure_is_best_effort() -> None:
+    fs = _FakeFs(exists_returns=True)
+    fs.delete = MagicMock(side_effect=RuntimeError("cleanup failed"))  # type: ignore[method-assign]
+    spark = _build_fake_spark(fs)
+    config = LoadingConfig(destination="s3", s3_bucket="my-bucket")
+
+    preflight_destinations(spark, [config], write_probe=True)
+
+    assert fs.write_calls == [b"spine-preflight"]
+    fs.delete.assert_called_once()
+
+
+def test_preflight_destinations_wraps_loading_base_uri_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = LoadingConfig(destination="s3", s3_bucket="my-bucket")
+    spark = _build_fake_spark(_FakeFs())
+    monkeypatch.setattr(
+        destination_preflight,
+        "loading_base_uri",
+        lambda _cfg: (_ for _ in ()).throw(ValueError("bad uri")),
+    )
+
+    with pytest.raises(HandlerError, match="Invalid loading destination configuration"):
+        preflight_destinations(spark, [config])

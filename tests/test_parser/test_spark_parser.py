@@ -141,3 +141,119 @@ def test_log_dataframe_info_swallows_errors() -> None:
     bad_df = MagicMock()
     bad_df.limit.side_effect = RuntimeError("boom")
     parser._log_dataframe_info(bad_df, "x")
+
+
+def test_get_request_value_returns_none_on_missing_or_invalid_paths() -> None:
+    parser = SparkParser(
+        config=ResourceConfig(),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    assert parser._get_request_value("x.y", "parameters", request_context={}) is None
+    assert (
+        parser._get_request_value(
+            "x.y",
+            "parameters",
+            request_context={"parameters": {"x": "not-a-dict"}},
+        )
+        is None
+    )
+    assert (
+        parser._get_request_value(
+            "x",
+            "parameters",
+            data_type="integer",
+            request_context={"parameters": {"x": "bad-int"}},
+        )
+        is None
+    )
+
+
+def test_apply_transformations_skips_existing_request_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ResourceConfig(
+        transformations=[
+            Transformation(
+                type=TransformationType.ADD_COLUMN_FROM_REQUEST,
+                name="ctx",
+                source="k",
+                location="parameters",
+                data_type="string",
+            )
+        ],
+    )
+    parser = SparkParser(
+        config=config,
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    df = MagicMock()
+    df.columns = ["ctx", "a"]
+    df.withColumn = MagicMock(return_value=df)
+    monkeypatch.setattr("src.parser.spark_parser.lit", lambda _x: MagicMock())
+
+    out = parser._apply_transformations(df, {"parameters": {"k": "v"}})
+    assert out is df
+    df.withColumn.assert_not_called()
+
+
+def test_extract_records_and_schema_response_key_non_dict_returns_empty() -> None:
+    parser = SparkParser(
+        config=ResourceConfig(response_key="data"),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    out = parser._extract_records_and_schema({"data": [1, 2, 3]}, None)
+    assert out["records"] == []
+
+
+def test_parse_ensure_param_values_skips_when_output_field_missing() -> None:
+    ensure_cfg = {"enabled": True, "param_name": "id", "output_field": "missing_col"}
+    parser = SparkParser(
+        config=ResourceConfig(ensure_param_values_in_output=ensure_cfg),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    base_df = MagicMock()
+    base_df.columns = ["id"]
+    parser.spark.createDataFrame.side_effect = [base_df, MagicMock()]
+    parser._get_request_value = MagicMock(return_value='["1","2"]')  # type: ignore[method-assign]
+
+    out = parser.parse([{"id": "1"}])
+    assert out is base_df
+
+
+def test_parse_ensure_param_values_inner_error_is_swallowed() -> None:
+    ensure_cfg = {"enabled": True, "param_name": "id", "output_field": "id"}
+    parser = SparkParser(
+        config=ResourceConfig(ensure_param_values_in_output=ensure_cfg),
+        spark=MagicMock(),
+        source_name="s",
+        resource_name="r",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    base_df = MagicMock()
+    base_df.columns = ["id"]
+    base_df.alias.return_value = base_df
+    params_df = MagicMock()
+    params_df.alias.return_value = params_df
+    parser.spark.createDataFrame.side_effect = [base_df, params_df]
+    parser._get_request_value = MagicMock(return_value='["1"]')  # type: ignore[method-assign]
+    params_df.join.side_effect = RuntimeError("join failed")
+
+    out = parser.parse([{"id": "1"}])
+    assert out is base_df

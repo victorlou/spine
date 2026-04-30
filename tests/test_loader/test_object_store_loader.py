@@ -311,3 +311,482 @@ def test_retry_gives_up_on_non_transient() -> None:
 
     with pytest.raises(RuntimeError, match="permanent"):
         boom()
+
+
+def test_retry_succeeds_after_one_transient_failure() -> None:
+    attempts = []
+
+    @retry_on_transient_storage_error(max_retries=3, delay=0)
+    def flaky():
+        if not attempts:
+            attempts.append(1)
+            raise RuntimeError("Connection reset by peer")
+        return "ok"
+
+    assert flaky() == "ok"
+    assert len(attempts) == 1  # raised once, then succeeded
+
+
+# ---------------------------------------------------------------------------
+# _get_source_type_prefix — all mapping branches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source_type, expected",
+    [
+        ("rest_api", "rest_api"),
+        ("python_sdk", "sdk"),
+        ("postgresql", "database"),
+        ("hana", "database"),
+        ("unknown_type", ""),
+        (None, ""),
+    ],
+)
+def test_get_source_type_prefix_all_branches(source_type, expected) -> None:
+    loader = ObjectStoreLoader()
+    assert loader._get_source_type_prefix(source_type) == expected
+
+
+def test_get_source_type_prefix_with_enum_value() -> None:
+    from src.config.config_models import SourceType
+
+    loader = ObjectStoreLoader()
+    assert loader._get_source_type_prefix(SourceType.REST_API) == "rest_api"
+    assert loader._get_source_type_prefix(SourceType.PYTHON_SDK) == "sdk"
+
+
+# ---------------------------------------------------------------------------
+# _generate_table_path
+# ---------------------------------------------------------------------------
+
+
+def test_generate_table_path_constructs_path_from_prefix_and_source_type() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    result = loader._generate_table_path("s3a://b", "src/res", "rest_api")
+    assert result == "s3a://b/rest_api/src/res/"
+
+
+def test_generate_table_path_no_prefix_no_source_type() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    result = loader._generate_table_path("s3a://b", None, None)
+    assert result == "s3a://b/"
+
+
+# ---------------------------------------------------------------------------
+# _load_delta — append, merge (new table), merge (existing table)
+# ---------------------------------------------------------------------------
+
+
+def _loader_with_mocked_internals(write_side_effect=None, table_exists_return=False):
+    """Return a loader with Spark set and key internal methods mocked."""
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    df, _, _, _ = _df_chain()
+    loader._rename_duplicate_columns = MagicMock(return_value=df)
+    loader._sanitize_column_names = MagicMock(return_value=df)
+    loader._generate_table_path = MagicMock(return_value="s3a://b/delta-table/")
+    loader._write_dataframe = MagicMock(side_effect=write_side_effect)
+    loader._table_exists = MagicMock(return_value=table_exists_return)
+    loader._perform_delta_merge = MagicMock()
+    return loader, df
+
+
+def test_load_delta_append_calls_write_dataframe() -> None:
+    loader, df = _loader_with_mocked_internals()
+    cfg = LoadingConfig(
+        destination="s3", s3_bucket="b", prefix="s/r", write_mode="append", format="delta"
+    )
+    result = loader._load_delta(df, cfg, base_uri="s3a://b")
+    loader._write_dataframe.assert_called_once()
+    call_opts = loader._write_dataframe.call_args[0][2]
+    assert call_opts["mode"] == "append"
+    assert call_opts["format"] == LoadingFormat.DELTA
+    assert result == "s3a://b/delta-table/"
+
+
+def test_load_delta_merge_new_table_bootstraps_with_append() -> None:
+    loader, df = _loader_with_mocked_internals(table_exists_return=False)
+    cfg = LoadingConfig(
+        destination="s3",
+        s3_bucket="b",
+        prefix="s/r",
+        write_mode="merge",
+        merge_keys=["id"],
+        format="delta",
+    )
+    loader._load_delta(df, cfg, base_uri="s3a://b")
+    loader._write_dataframe.assert_called_once()
+    loader._perform_delta_merge.assert_not_called()
+    call_opts = loader._write_dataframe.call_args[0][2]
+    assert call_opts["mode"] == "append"
+
+
+def test_load_delta_merge_existing_table_calls_perform_delta_merge() -> None:
+    loader, df = _loader_with_mocked_internals(table_exists_return=True)
+    cfg = LoadingConfig(
+        destination="s3",
+        s3_bucket="b",
+        prefix="s/r",
+        write_mode="merge",
+        merge_keys=["id"],
+        format="delta",
+    )
+    loader._load_delta(df, cfg, base_uri="s3a://b")
+    loader._perform_delta_merge.assert_called_once()
+    loader._write_dataframe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _load_iceberg — append and finally cleanup
+# ---------------------------------------------------------------------------
+
+
+def _iceberg_loader(write_side_effect=None, table_exists_return=False):
+    """Return a loader with Spark and internals mocked for Iceberg tests."""
+    loader = ObjectStoreLoader()
+    spark = MagicMock()
+    loader.set_spark_session(spark)
+    df, _, _, _ = _df_chain()
+    loader._rename_duplicate_columns = MagicMock(return_value=df)
+    loader._sanitize_column_names = MagicMock(return_value=df)
+    loader._generate_table_path = MagicMock(return_value="file:///wh/ns/t/")
+    loader._write_dataframe = MagicMock(side_effect=write_side_effect)
+    loader._table_exists = MagicMock(return_value=table_exists_return)
+    loader._perform_iceberg_merge = MagicMock()
+    return loader, df, spark
+
+
+def test_load_iceberg_append_calls_write_dataframe_with_iceberg_flag() -> None:
+    loader, df, _spark = _iceberg_loader()
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root="/wh",
+        prefix="ns/t",
+        write_mode="append",
+        format="iceberg",
+    )
+    loader._load_iceberg(df, cfg, base_uri="file:///wh")
+    loader._write_dataframe.assert_called_once()
+    _, _, call_kw = (
+        loader._write_dataframe.call_args[0][0],
+        loader._write_dataframe.call_args[0][1],
+        loader._write_dataframe.call_args[1],
+    )
+    assert call_kw.get("iceberg") is True
+
+
+def test_load_iceberg_unsets_warehouse_conf_on_write_error() -> None:
+    loader, df, spark = _iceberg_loader(write_side_effect=LoaderError("write failed"))
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root="/wh",
+        prefix="ns/t",
+        write_mode="append",
+        format="iceberg",
+    )
+    with pytest.raises(LoaderError):
+        loader._load_iceberg(df, cfg, base_uri="file:///wh")
+    spark.conf.unset.assert_called_once_with("spark.sql.catalog.iceberg.warehouse")
+
+
+# ---------------------------------------------------------------------------
+# _load_file_based — happy path and cleanup on error
+# ---------------------------------------------------------------------------
+
+
+def _file_based_loader(write_side_effect=None):
+    """Return a loader with internals mocked for file-based write tests."""
+    loader = ObjectStoreLoader()
+    spark = MagicMock()
+    loader.set_spark_session(spark)
+    loader._object_store = MagicMock()
+    df, _, _, _ = _df_chain()
+    loader._write_dataframe = MagicMock(side_effect=write_side_effect)
+    loader._generate_final_path = MagicMock(return_value=("s3a://b/final.parquet", "final.parquet"))
+    loader._generate_temp_path = MagicMock(return_value="s3a://b/tmp/spark_writes/k1")
+    loader._move_uri = MagicMock()
+    loader._cleanup_temp_dir = MagicMock()
+    loader._object_store.glob_first_part_file.return_value = "s3a://b/tmp/part-0.parquet"
+    return loader, df
+
+
+def test_load_file_based_writes_to_temp_then_moves() -> None:
+    loader, df = _file_based_loader()
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="s/r", write_mode="overwrite")
+    result = loader._load_file_based(df, cfg, base_uri="s3a://b")
+    loader._write_dataframe.assert_called_once()
+    loader._move_uri.assert_called_once()
+    loader._cleanup_temp_dir.assert_called_once()
+    assert result == "final.parquet"
+
+
+def test_load_file_based_cleans_up_temp_on_write_error() -> None:
+    loader, df = _file_based_loader(write_side_effect=LoaderError("disk full"))
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="s/r", write_mode="overwrite")
+    with pytest.raises(LoaderError):
+        loader._load_file_based(df, cfg, base_uri="s3a://b")
+    loader._cleanup_temp_dir.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _load_delta — overwrite mode
+# ---------------------------------------------------------------------------
+
+
+def test_load_delta_overwrite_calls_write_dataframe() -> None:
+    loader, df = _loader_with_mocked_internals()
+    cfg = LoadingConfig(
+        destination="s3", s3_bucket="b", prefix="s/r", write_mode="overwrite", format="delta"
+    )
+    result = loader._load_delta(df, cfg, base_uri="s3a://b")
+    loader._write_dataframe.assert_called_once()
+    call_opts = loader._write_dataframe.call_args[0][2]
+    assert call_opts["mode"] == "overwrite"
+    assert result == "s3a://b/delta-table/"
+
+
+# ---------------------------------------------------------------------------
+# _load_iceberg — merge on new table, merge on existing, overwrite
+# ---------------------------------------------------------------------------
+
+
+def test_load_iceberg_merge_new_table_bootstraps_with_append() -> None:
+    loader, df, _spark = _iceberg_loader(table_exists_return=False)
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root="/wh",
+        prefix="ns/t",
+        write_mode="merge",
+        merge_keys=["id"],
+        format="iceberg",
+    )
+    loader._load_iceberg(df, cfg, base_uri="file:///wh")
+    loader._write_dataframe.assert_called_once()
+    loader._perform_iceberg_merge.assert_not_called()
+    kw = loader._write_dataframe.call_args[1]
+    assert kw.get("iceberg") is True
+    call_opts = loader._write_dataframe.call_args[0][2]
+    assert call_opts["mode"] == "append"
+
+
+def test_load_iceberg_merge_existing_table_calls_perform_iceberg_merge() -> None:
+    loader, df, _spark = _iceberg_loader(table_exists_return=True)
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root="/wh",
+        prefix="ns/t",
+        write_mode="merge",
+        merge_keys=["id"],
+        format="iceberg",
+    )
+    loader._load_iceberg(df, cfg, base_uri="file:///wh")
+    loader._perform_iceberg_merge.assert_called_once()
+    loader._write_dataframe.assert_not_called()
+
+
+def test_load_iceberg_overwrite_calls_write_dataframe() -> None:
+    loader, df, _spark = _iceberg_loader()
+    cfg = LoadingConfig(
+        destination="local",
+        storage_root="/wh",
+        prefix="ns/t",
+        write_mode="overwrite",
+        format="iceberg",
+    )
+    loader._load_iceberg(df, cfg, base_uri="file:///wh")
+    loader._write_dataframe.assert_called_once()
+    kw = loader._write_dataframe.call_args[1]
+    assert kw.get("iceberg") is True
+    call_opts = loader._write_dataframe.call_args[0][2]
+    assert call_opts["mode"] == "overwrite"
+
+
+# ---------------------------------------------------------------------------
+# _table_exists — exception path returns False
+# ---------------------------------------------------------------------------
+
+
+def test_table_exists_exception_returns_false() -> None:
+    loader = ObjectStoreLoader()
+    loader.logger = MagicMock()
+    store = MagicMock()
+    store.resolve_path.side_effect = RuntimeError("storage error")
+    loader._object_store = store
+    result = loader._table_exists("s3a://b/path/", LoadingFormat.DELTA)
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# destination_exists — returns False for non-delta/iceberg format
+# ---------------------------------------------------------------------------
+
+
+def test_destination_exists_returns_false_for_local_destination() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    cfg = LoadingConfig(destination="local", storage_root="/tmp", format="delta")
+    assert loader.destination_exists(cfg) is False
+
+
+def test_destination_exists_returns_false_when_no_spark() -> None:
+    loader = ObjectStoreLoader()
+    loader._spark = None
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format="delta")
+    assert loader.destination_exists(cfg) is False
+
+
+def test_destination_exists_delegates_to_table_exists() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    loader._object_store = MagicMock()
+    loader._object_store.resolve_path.return_value = "s3a://b/a/r/_delta_log"
+    loader._table_exists = MagicMock(return_value=True)
+    loader._generate_table_path = MagicMock(return_value="s3a://b/a/r/")
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format="delta")
+    result = loader.destination_exists(cfg)
+    loader._table_exists.assert_called_once()
+    assert result is True
+
+
+def test_destination_exists_s3_missing_prefix_returns_false() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", format="delta")
+    assert loader.destination_exists(cfg) is False
+
+
+def test_destination_exists_gcs_missing_prefix_returns_false() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    cfg = LoadingConfig(destination="gcs", gcs_bucket="b", format="delta")
+    assert loader.destination_exists(cfg) is False
+
+
+def test_destination_exists_azure_blob_missing_prefix_returns_false() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    cfg = LoadingConfig(
+        destination="azure_blob",
+        azure_container="c",
+        azure_account="acc",
+        format="delta",
+    )
+    assert loader.destination_exists(cfg) is False
+
+
+# ---------------------------------------------------------------------------
+# _perform_delta_merge — missing merge keys and no spark raise LoaderError
+# ---------------------------------------------------------------------------
+
+
+def test_perform_delta_merge_missing_merge_key_raises() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    loader.logger = MagicMock()
+    df = MagicMock()
+    df.columns = ["name", "value"]
+    cfg = LoadingConfig(
+        destination="s3",
+        s3_bucket="b",
+        prefix="a/r",
+        write_mode="merge",
+        merge_keys=["id"],
+        format="delta",
+    )
+    with pytest.raises(LoaderError, match="Merge keys not found"):
+        loader._perform_delta_merge(df, "s3a://b/table/", ["id"], cfg)
+
+
+def test_perform_delta_merge_no_spark_raises() -> None:
+    loader = ObjectStoreLoader()
+    loader.logger = MagicMock()
+    loader._spark = None
+    df = MagicMock()
+    df.columns = ["id", "name"]
+    cfg = LoadingConfig(
+        destination="s3",
+        s3_bucket="b",
+        prefix="a/r",
+        write_mode="merge",
+        merge_keys=["id"],
+        format="delta",
+    )
+    with pytest.raises(LoaderError, match="Spark session not set"):
+        loader._perform_delta_merge(df, "s3a://b/table/", ["id"], cfg)
+
+
+# ---------------------------------------------------------------------------
+# _create_dataframe — exception path raises LoaderError (lines 329-339)
+# ---------------------------------------------------------------------------
+
+
+def test_create_dataframe_exception_raises_loader_error() -> None:
+    loader = ObjectStoreLoader()
+    spark = MagicMock()
+    spark.createDataFrame.side_effect = RuntimeError("spark exploded")
+    loader.set_spark_session(spark)
+    loader.logger = MagicMock()
+    with pytest.raises(LoaderError, match="Failed to create Spark DataFrame"):
+        loader._create_dataframe([{"id": 1}], schema=None)
+
+
+# ---------------------------------------------------------------------------
+# _write_dataframe — iceberg without warehouse raises LoaderError (line 431)
+# ---------------------------------------------------------------------------
+
+
+def test_write_dataframe_iceberg_missing_warehouse_raises() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    loader.logger = MagicMock()
+    df = MagicMock()
+    df.coalesce.return_value = df
+    df.write = MagicMock()
+    df.write.format.return_value = df.write
+    df.write.mode.return_value = df.write
+    with pytest.raises(LoaderError, match="iceberg_warehouse_path"):
+        loader._write_dataframe(
+            df, "s3a://b/path/", {"format": "delta", "mode": "overwrite"}, iceberg=True
+        )
+
+
+# ---------------------------------------------------------------------------
+# load — ValueError from loading_base_uri raises LoaderError (lines 520-521)
+# ---------------------------------------------------------------------------
+
+
+def test_load_raises_loader_error_on_invalid_base_uri() -> None:
+    loader = ObjectStoreLoader()
+    loader.set_spark_session(MagicMock())
+    loader.logger = MagicMock()
+    cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format="delta")
+    with patch(
+        "src.loader.object_store_loader.loading_base_uri", side_effect=ValueError("bad uri")
+    ):
+        with pytest.raises(LoaderError, match="bad uri"):
+            loader.load([{"id": 1}], cfg)
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_temp_dir — exception path logs warning (lines 478-482)
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_temp_dir_exception_logged() -> None:
+    loader = ObjectStoreLoader()
+    spark = MagicMock()
+    jvm = MagicMock()
+    path_obj = MagicMock()
+    path_obj.getParent.return_value.toString.return_value = "s3a://b/.spark-writes/"
+    path_obj.getParent.return_value.getParent.return_value.toString.return_value = "s3a://b/.temp/"
+    jvm.org.apache.hadoop.fs.Path.return_value = path_obj
+    spark.sparkContext._jvm = jvm
+    loader.set_spark_session(spark)
+    loader.logger = MagicMock()
+    store = MagicMock()
+    store.delete.side_effect = RuntimeError("delete failed")
+    loader._cleanup_temp_dir(store, "s3a://b/.temp/.spark-writes/part-0.parquet")
+    loader.logger.warning.assert_called_once()

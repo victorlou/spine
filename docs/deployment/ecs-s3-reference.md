@@ -31,7 +31,7 @@ flowchart LR
   s3prefix --> ecsPull --> cfgPath --> spine
 ```
 
-1. **Promotion:** upload a `CONFIG_PATH`-shaped tree to `s3://your-bucket/your-prefix/` (for example with `python -m src.utils.s3_config_push`, `aws s3 sync`, or CI). Requires `s3:PutObject` (and listing as your tooling needs).
+1. **Promotion:** upload a `CONFIG_PATH`-shaped tree to `s3://your-bucket/your-prefix/` (for example with `python -m scripts.s3_config_push`, `aws s3 sync`, or CI). Requires `s3:PutObject` (and listing as your tooling needs).
 2. **Runtime:** files must exist on disk at `CONFIG_PATH` before `python -m src.main`. The stock image can **pull from S3 using boto3** when `SPINE_CONFIG_S3_URI` is set (see below)—**no AWS CLI, no sidecar, no child image** for that path. Alternatives remain: `aws s3 sync` in `command`, EFS, init containers, etc.
 
 ---
@@ -43,7 +43,7 @@ The public image **`ENTRYPOINT`** is `/startup.sh` (Redis, then `python -m src.m
 1. Set **`SPINE_CONFIG_S3_URI`** to your operator prefix, for example `s3://<bucket-from-your-infra>/config/` (objects under that prefix should mirror `defaults.yml`, `sources/…`, `queries/…`).
 2. Optionally set **`CONFIG_PATH`** to an **absolute** directory inside the container (recommended for clarity). If unset, pull targets **`/config`**, which matches Spine’s default resolution for `CONFIG_PATH=.`.
 
-`startup.sh` runs `python -m src.utils.s3_config_pull` (boto3) before the app. The task **IAM role** must allow **`s3:GetObject`** on `prefix/*` and **`s3:ListBucket`** on the bucket (often prefix-scoped in the bucket policy).
+`startup.sh` runs `python -m scripts.s3_config_pull` (boto3) before the app. The task **IAM role** must allow **`s3:GetObject`** on `prefix/*` and **`s3:ListBucket`** on the bucket (often prefix-scoped in the bucket policy).
 
 **Merge vs delete:** pull **downloads and overwrites** keys that exist in S3; it does **not** delete extra files already on disk under the target path (unlike `aws s3 sync --delete`). The image may ship template files under `/config`; if that is a problem, set `CONFIG_PATH` to a dedicated empty path (for example `/config-runtime`) and pull there instead.
 
@@ -74,7 +74,7 @@ The public image **`ENTRYPOINT`** is `/startup.sh` (Redis, then `python -m src.m
 One-off or CI step from a checkout that has your real operator files under `config/`:
 
 ```bash
-python -m src.utils.s3_config_push s3://your-bucket/your-prefix/
+python -m scripts.s3_config_push s3://your-bucket/your-prefix/
 ```
 
 - Resolves the local tree like runtime `CONFIG_PATH`: uses the `CONFIG_PATH` environment variable if set (absolute path, or relative segment under `config/`), otherwise `config/` at the repo root.

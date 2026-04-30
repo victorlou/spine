@@ -54,7 +54,7 @@ A separate weekly cleanup workflow keeps the registry tidy while preserving mult
 - Prefer **`defaults.spark_runtime`** in `defaults.yml` for Spark host profile and symmetric S3/GCS/Azure connector provisioning (`packages` vs `external`). Spine detects common managed environments (Databricks, EMR, ECS, Kubernetes) when `profile` is `auto`.
 - Optional environment overrides (for CI or images that cannot edit YAML): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (shaded GCS connector URL for `spark.jars` when mode is `packages`), `SPARK_AZURE_CONNECTOR_MODE`, `SPINE_GCS_AUTH_TYPE` (defaults to `APPLICATION_DEFAULT`; set `COMPUTE_ENGINE` only when intentionally relying on metadata auth). When unset, YAML and auto-detection drive behavior.
 - Destination preflight filesystem timeout can be tuned with `SPINE_DESTINATION_PREFLIGHT_FILESYSTEM_TIMEOUT_SECONDS` (default `45`). This applies to Hadoop `FileSystem.get(...)` and root listing probes across S3/GCS/Azure so hangs fail fast with actionable logs.
-- For **ECS Fargate**, promoting config to **S3**, optional **`SPINE_CONFIG_S3_URI`** pull at container start (boto3), GHCR image pinning, and task-definition patterns (all placeholders), see the [ECS + S3 reference](deployment/ecs-s3-reference.md), including `python -m src.utils.s3_config_push` for one-off or CI uploads.
+- For **ECS Fargate**, promoting config to **S3**, optional **`SPINE_CONFIG_S3_URI`** pull at container start (boto3), GHCR image pinning, and task-definition patterns (all placeholders), see the [ECS + S3 reference](deployment/ecs-s3-reference.md), including `python -m scripts.s3_config_push` for one-off or CI uploads.
 
 ## Error Handling and Monitoring
 

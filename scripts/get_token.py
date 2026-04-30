@@ -41,7 +41,7 @@ def main():
     source_name = sys.argv[1] if len(sys.argv) > 1 else None
     if not source_name:
         print("Error: Please provide a source name as argument")
-        print("Usage: python -m src.get_token <source_name>")
+        print("Usage: python -m scripts.get_token <source_name>")
         sys.exit(1)
 
     # Load config for this source only so we don't require env vars for unrelated sources

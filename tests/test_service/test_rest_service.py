@@ -1,12 +1,14 @@
 """Targeted unit tests for RestService core branches."""
 
 import base64
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from src.config.config_models import ResourceConfig
 from src.service.base_service import ServiceError
 from src.service.rest_service import RestService
 
@@ -118,3 +120,117 @@ def test_poll_snapshot_success_and_json_error() -> None:
     svc.make_request = MagicMock(return_value=bad_response)
     with pytest.raises(ServiceError, match="Invalid JSON in snapshot poll response"):
         svc.poll_snapshot("status", {"id": "1"})
+
+
+def _http_response(**kwargs) -> MagicMock:
+    r = MagicMock()
+    r.ok = kwargs.get("ok", True)
+    r.status_code = kwargs.get("status_code", 200)
+    hdrs = MagicMock()
+    hdrs.get.side_effect = lambda k, d=None: kwargs.get("headers", {}).get(k, d)
+    r.headers = hdrs
+    data = kwargs.get("json_data", {})
+    r.json.return_value = data
+    raw = json.dumps(data) if not isinstance(data, str) else data
+    r.content = raw.encode() if isinstance(raw, str) else b""
+    r.text = raw if isinstance(raw, str) else json.dumps(data)
+    el = MagicMock()
+    el.total_seconds.return_value = 0.01
+    r.elapsed = el
+    r.raw = SimpleNamespace(version=11)
+    return r
+
+
+def _make_request_service(session: MagicMock) -> RestService:
+    svc = RestService.__new__(RestService)
+    svc.settings = SimpleNamespace(
+        api=SimpleNamespace(TIMEOUT=5, MAX_RETRIES=1, INITIAL_DELAY=0, RETRY_BACKOFF=2)
+    )
+    svc.source_name = "api"
+    svc.config = SimpleNamespace(headers={})
+    svc.logger = MagicMock()
+    svc.redis_context = MagicMock()
+    svc.audit_recorder = None
+    svc.get_headers = MagicMock(return_value={"H": "1", "Content-Type": "application/json"})
+    svc._format_request_params = lambda params, res: params  # type: ignore[assignment]
+    svc._reset_auth = MagicMock()
+    object.__setattr__(svc, "_session", session)
+    return svc
+
+
+def test_make_request_get_wraps_object_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.service.rest_service.time.sleep", lambda s: None)
+    session = MagicMock()
+    session.get.return_value = _http_response(json_data={"a": 1})
+    svc = _make_request_service(session)
+    res = ResourceConfig(method="GET", path="/x", request_inputs={})
+    out = svc._make_request(res, "https://api.example.com/x", {}, resource_name="r1")
+    assert out == [{"a": 1}]
+
+
+def test_make_request_get_with_response_key_missing_returns_empty() -> None:
+    session = MagicMock()
+    session.get.return_value = _http_response(json_data={"other": 1})
+    svc = _make_request_service(session)
+    res = ResourceConfig(method="GET", path="/x", request_inputs={}, response_key="data.items")
+    out = svc._make_request(res, "https://api.example.com/x", {}, resource_name="r1")
+    assert out == []
+
+
+def test_make_request_post_json_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.service.rest_service.time.sleep", lambda s: None)
+    session = MagicMock()
+    session.post.return_value = _http_response(json_data={"ok": True})
+    svc = _make_request_service(session)
+    svc.get_headers = MagicMock(return_value={"Content-Type": "application/json"})
+    res = ResourceConfig(
+        method="POST",
+        path="/x",
+        request_inputs={},
+    )
+    svc._make_request(res, "https://api.example.com/x", {}, resource_name="r1")
+    session.post.assert_called_once()
+    kw = session.post.call_args.kwargs
+    assert "json" in kw
+
+
+def test_make_request_skip_encoding_builds_query_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.service.rest_service.time.sleep", lambda s: None)
+    session = MagicMock()
+    session.get.return_value = _http_response(json_data=[1])
+    svc = _make_request_service(session)
+    res = ResourceConfig(
+        method="GET",
+        path="/x",
+        skip_encoding_params=True,
+        request_inputs={},
+    )
+    svc._make_request(res, "https://api.example.com/x", {"k": ["a", "b"]}, resource_name="r1")
+    url = session.get.call_args.args[0]
+    assert "k=a" in url and "k=b" in url
+
+
+def test_make_request_invalid_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.service.rest_service.time.sleep", lambda s: None)
+    session = MagicMock()
+    bad = _http_response(ok=True, json_data={})
+    bad.json.side_effect = ValueError("not json")
+    session.get.return_value = bad
+    svc = _make_request_service(session)
+    res = ResourceConfig(method="GET", path="/x", request_inputs={})
+    with pytest.raises(ServiceError, match="Invalid JSON response"):
+        svc._make_request(res, "https://api.example.com/x", {}, resource_name="r1")
+
+
+def test_make_request_auth_retry_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.service.rest_service.time.sleep", lambda s: None)
+    fail = _http_response(ok=False, status_code=401, json_data={"error": "invalid_token"})
+    fail.raise_for_status.side_effect = Exception("http error")
+    ok = _http_response(json_data={"ok": True})
+    session = MagicMock()
+    session.get.side_effect = [fail, ok]
+    svc = _make_request_service(session)
+    svc.settings.api.MAX_RETRIES = 2
+    res = ResourceConfig(method="GET", path="/x", request_inputs={})
+    svc._make_request(res, "https://api.example.com/x", {}, resource_name="r1")
+    assert session.get.call_count == 2

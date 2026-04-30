@@ -539,22 +539,25 @@ class TestRedaction:
         assert "=empty-key-value" in output
         assert "Event" in output
 
-    def test_redaction_api_public_and_usable(self, clean_redact_env: None) -> None:
-        """Public redaction API (constants and functions) is importable and behaves as documented."""
+    def test_redaction_constants_public(self, clean_redact_env: None) -> None:
         assert isinstance(SENSITIVE_KEY_EXACT, frozenset)
         assert "API_KEY" in SENSITIVE_KEY_SUBSTRINGS
         assert "DATABRICKS_TOKEN" in SENSITIVE_KEY_EXACT
+        assert "apikey" in NORMALIZED_SUBSTRINGS
+        assert "databrickstoken" in NORMALIZED_EXACT
+
+    def test_is_sensitive_key_and_normalize_key_public(self, clean_redact_env: None) -> None:
         assert is_sensitive_key("API_KEY") is True
         assert is_sensitive_key("region") is False
         assert is_sensitive_key("") is False
-        assert redact_text("") == ""
-        assert redact_text("key=val") == "key=val"
-        assert redact_text("API_KEY=sk-secret") == f"API_KEY={REDACTED_PLACEHOLDER}"
         assert is_sensitive_key("API-KEY") is True
         assert is_sensitive_key("API.KEY") is True
         assert normalize_key("API-KEY") == "apikey"
-        assert "apikey" in NORMALIZED_SUBSTRINGS
-        assert "databrickstoken" in NORMALIZED_EXACT
+
+    def test_redact_text_public(self, clean_redact_env: None) -> None:
+        assert redact_text("") == ""
+        assert redact_text("key=val") == "key=val"
+        assert redact_text("API_KEY=sk-secret") == f"API_KEY={REDACTED_PLACEHOLDER}"
 
     def test_normalized_key_variants(self, capture_logs: StringIO, clean_redact_env: None) -> None:
         """API_KEY, API-KEY, API.KEY are all treated as sensitive via normalized substring match."""

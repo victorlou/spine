@@ -9,19 +9,6 @@ from src.config.config_spark import _HADOOP_AWS_PKG, SparkSessionConf
 from src.config.spark_runtime import resolve_spark_runtime
 
 
-@pytest.fixture(autouse=True)
-def _clear_managed_spark_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default each test to a local-dev signal so GCS readiness branches deterministically."""
-    for key in (
-        "DATABRICKS_RUNTIME_VERSION",
-        "EMR_STEP_ID",
-        "EMR_CLUSTER_ID",
-        "ECS_CONTAINER_METADATA_URI",
-        "KUBERNETES_SERVICE_HOST",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
-
 def test_managed_configs_sets_driver_bind_for_embedded_spark() -> None:
     """IAM/managed path must set driver bind; otherwise Spark can fail on cloud VMs/containers."""
     resolved = resolve_spark_runtime(SparkRuntimeConfig())

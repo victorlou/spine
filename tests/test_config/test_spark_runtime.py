@@ -12,17 +12,12 @@ from src.config.spark_runtime import (
 
 def test_detect_databricks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-    monkeypatch.delenv("EMR_STEP_ID", raising=False)
-    monkeypatch.delenv("EMR_CLUSTER_ID", raising=False)
-    monkeypatch.delenv("ECS_CONTAINER_METADATA_URI", raising=False)
-    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
     platform, src = detect_managed_spark_platform()
     assert platform == ManagedSparkPlatform.DATABRICKS
     assert "DATABRICKS" in src
 
 
 def test_detect_emr_step(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
     monkeypatch.setenv("EMR_STEP_ID", "s-123")
     platform, _ = detect_managed_spark_platform()
     assert platform == ManagedSparkPlatform.EMR
@@ -39,14 +34,6 @@ def test_auto_gcs_external_on_databricks(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_auto_gcs_packages_locally(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in (
-        "DATABRICKS_RUNTIME_VERSION",
-        "EMR_STEP_ID",
-        "EMR_CLUSTER_ID",
-        "ECS_CONTAINER_METADATA_URI",
-        "KUBERNETES_SERVICE_HOST",
-    ):
-        monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("SPARK_GCS_CONNECTOR_MODE", raising=False)
     monkeypatch.delenv("SPARK_S3_CONNECTOR_MODE", raising=False)
     r = resolve_spark_runtime(SparkRuntimeConfig())

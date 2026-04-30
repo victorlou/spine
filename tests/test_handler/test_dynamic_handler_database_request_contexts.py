@@ -27,33 +27,42 @@ def test_reject_multiple_contexts_for_database_raises() -> None:
 
 
 def test_reject_multiple_contexts_skipped_when_not_database() -> None:
-    reject_if_database_has_multiple_runtime_request_contexts(
-        is_db=False,
-        request_context_count=5,
-        resource_name="api",
-        source_name="rest",
-        batch_input_keys=["x"],
-        use_backfill=True,
+    assert (
+        reject_if_database_has_multiple_runtime_request_contexts(
+            is_db=False,
+            request_context_count=5,
+            resource_name="api",
+            source_name="rest",
+            batch_input_keys=["x"],
+            use_backfill=True,
+        )
+        is None
     )
 
 
 def test_reject_multiple_contexts_skipped_when_single_context() -> None:
-    reject_if_database_has_multiple_runtime_request_contexts(
-        is_db=True,
-        request_context_count=1,
-        resource_name="users",
-        source_name="pg",
-        batch_input_keys=[],
-        use_backfill=False,
+    assert (
+        reject_if_database_has_multiple_runtime_request_contexts(
+            is_db=True,
+            request_context_count=1,
+            resource_name="users",
+            source_name="pg",
+            batch_input_keys=[],
+            use_backfill=False,
+        )
+        is None
     )
 
 
 def test_reject_multiple_contexts_skipped_when_zero_contexts() -> None:
-    reject_if_database_has_multiple_runtime_request_contexts(
-        is_db=True,
-        request_context_count=0,
-        resource_name="users",
-        source_name="pg",
-        batch_input_keys=[],
-        use_backfill=False,
+    assert (
+        reject_if_database_has_multiple_runtime_request_contexts(
+            is_db=True,
+            request_context_count=0,
+            resource_name="users",
+            source_name="pg",
+            batch_input_keys=[],
+            use_backfill=False,
+        )
+        is None
     )

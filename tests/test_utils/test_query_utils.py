@@ -1,3 +1,5 @@
+"""Tests for ``validate_query_content`` (SQL allowlist / guard behavior)."""
+
 from src.utils.query_utils import validate_query_content
 
 

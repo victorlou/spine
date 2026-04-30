@@ -1158,7 +1158,9 @@ class ResourceConfig(BaseModel):
         )
         out = {}
         for name, raw in v.items():
-            if not isinstance(raw, dict):
+            if isinstance(raw, RequestInputConfig):
+                out[name] = raw
+            elif not isinstance(raw, dict):
                 out[name] = {"value": raw}
             elif "value" in raw:
                 out[name] = raw

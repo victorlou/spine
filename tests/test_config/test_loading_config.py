@@ -32,9 +32,8 @@ def test_loading_config_s3_canonicalizes_bucket_name() -> None:
 
 
 def test_loading_config_s3_requires_bucket() -> None:
-    with pytest.raises(ValidationError) as ei:
+    with pytest.raises(ValidationError, match=r"(?i)bucket"):
         LoadingConfig(destination="s3", prefix="a/b", format="delta")
-    assert "s3_bucket" in str(ei.value).lower() or "bucket" in str(ei.value).lower()
 
 
 def test_loading_config_s3_bucket_alias_normalizes_to_s3_bucket() -> None:
@@ -55,9 +54,8 @@ def test_loading_config_s3_bucket_alias_conflict_errors() -> None:
 
 
 def test_loading_config_s3_requires_prefix_shape() -> None:
-    with pytest.raises(ValidationError) as ei:
+    with pytest.raises(ValidationError, match=r"(?i)prefix|source_name"):
         LoadingConfig(destination="s3", bucket="b", prefix="onlyone", format="delta")
-    assert "prefix" in str(ei.value).lower() or "source_name" in str(ei.value).lower()
 
 
 def test_loading_config_local_valid(tmp_path: Path) -> None:
@@ -71,9 +69,8 @@ def test_loading_config_local_valid(tmp_path: Path) -> None:
 
 
 def test_loading_config_local_requires_storage_root() -> None:
-    with pytest.raises(ValidationError) as ei:
+    with pytest.raises(ValidationError, match="storage_root"):
         LoadingConfig(destination="local", prefix="a/b", format="delta")
-    assert "storage_root" in str(ei.value).lower()
 
 
 def test_loading_config_local_allows_relative_storage_root() -> None:
@@ -172,7 +169,7 @@ def test_loading_config_azure_bucket_conflict_errors() -> None:
 
 
 def test_loading_config_merge_requires_keys() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"(?i)merge"):
         LoadingConfig(
             destination="local",
             storage_root="/tmp",

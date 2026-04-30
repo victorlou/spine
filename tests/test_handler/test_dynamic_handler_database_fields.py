@@ -1,34 +1,70 @@
 """Tests for optional database ``fields`` in ``DynamicHandler._build_database_dataframe``."""
 
+from unittest.mock import MagicMock
+
 import pytest
-from pyspark.sql import SparkSession
 
 from src.config.config_models import ResourceConfig, SchemaField
 from src.handler.dynamic_handler import DynamicHandler
 from src.planner.execution_plan import ResourceMetadata
+from src.utils.exceptions import HandlerError
 from src.utils.logger import get_logger
 
 
-@pytest.fixture(scope="module")
-def spark_session() -> SparkSession:
-    spark = (
-        SparkSession.builder.master("local[1]")
-        .appName("test_db_fields")
-        .config("spark.driver.host", "127.0.0.1")
-        .config("spark.driver.bindAddress", "127.0.0.1")
-        .config("spark.ui.enabled", "false")
-        .config("spark.ui.showConsoleProgress", "false")
-        .getOrCreate()
-    )
-    yield spark
-    spark.stop()
+class _SparkStringType:
+    """Stand-in for Spark SQL string type label in ``str(field.dataType)`` assertions."""
+
+    def __str__(self) -> str:
+        return "StringType()"
+
+
+@pytest.fixture
+def patch_spark_col(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid real Spark ``col()`` (requires active JVM ``SparkContext``)."""
+
+    def _fake_col(_name: str) -> MagicMock:
+        chain = MagicMock()
+        chain.cast.return_value.alias.return_value = chain
+        return chain
+
+    monkeypatch.setattr("src.handler.dynamic_handler.col", _fake_col)
+
+
+def _make_extract_df(*, n_select_cols: int) -> MagicMock:
+    """Fake extracted DataFrame: ``select`` returns a row surface matching projection width."""
+    df = MagicMock()
+    df.columns = ["id", "label"]
+    f1, f2 = MagicMock(), MagicMock()
+    f1.dataType = _SparkStringType()
+    f2.dataType = _SparkStringType()
+    df.schema.fields = [f1, f2]
+
+    projected = MagicMock()
+    if n_select_cols == 1:
+        projected.columns = ["user_id"]
+        sf = MagicMock()
+        sf.dataType = _SparkStringType()
+        projected.schema.fields = [sf]
+    else:
+        projected.columns = ["id", "label"]
+        pf1, pf2 = MagicMock(), MagicMock()
+        pf1.dataType = _SparkStringType()
+        pf2.dataType = _SparkStringType()
+        projected.schema.fields = [pf1, pf2]
+    projected.count = MagicMock(return_value=1)
+
+    def _select(*_cols: object) -> MagicMock:
+        return projected
+
+    df.select.side_effect = _select
+    return df
 
 
 class _FakeDbService:
     """Spy for DB services: ``extract_invocations`` matches handler log field of the same name."""
 
-    def __init__(self, spark: SparkSession) -> None:
-        self._spark = spark
+    def __init__(self, extract_df: MagicMock) -> None:
+        self._df = extract_df
         self.extract_invocations = 0
 
     def connect(self) -> None:
@@ -41,14 +77,15 @@ class _FakeDbService:
         self, schema, table, select_query=None, spark_session=None, table_read_options=None
     ):
         self.extract_invocations += 1
-        return self._spark.createDataFrame([(1, "x")], schema=["id", "label"])
+        return self._df
 
 
-def test_build_database_dataframe_infers_fields_when_omitted(spark_session: SparkSession) -> None:
+def test_build_database_dataframe_infers_fields_when_omitted(patch_spark_col) -> None:
     handler = object.__new__(DynamicHandler)
-    handler.spark = spark_session
+    handler.spark = MagicMock()
     handler.logger = get_logger("test_dynamic_handler_db")
 
+    extract_df = _make_extract_df(n_select_cols=2)
     rc = ResourceConfig(method="GET", database_schema="public", database_table="users")
     meta = ResourceMetadata(
         source_name="pg",
@@ -59,7 +96,7 @@ def test_build_database_dataframe_infers_fields_when_omitted(spark_session: Spar
     )
 
     out = DynamicHandler._build_database_dataframe(
-        handler, _FakeDbService(spark_session), meta, request_contexts=[{}]
+        handler, _FakeDbService(extract_df), meta, request_contexts=[{}]
     )
     assert out is not None
     assert set(out.columns) == {"id", "label"}
@@ -67,11 +104,12 @@ def test_build_database_dataframe_infers_fields_when_omitted(spark_session: Spar
         assert str(field.dataType).startswith("StringType")
 
 
-def test_build_database_dataframe_respects_configured_fields(spark_session: SparkSession) -> None:
+def test_build_database_dataframe_respects_configured_fields(patch_spark_col) -> None:
     handler = object.__new__(DynamicHandler)
-    handler.spark = spark_session
+    handler.spark = MagicMock()
     handler.logger = get_logger("test_dynamic_handler_db")
 
+    extract_df = _make_extract_df(n_select_cols=1)
     rc = ResourceConfig(
         method="GET",
         database_schema="public",
@@ -87,20 +125,19 @@ def test_build_database_dataframe_respects_configured_fields(spark_session: Spar
     )
 
     out = DynamicHandler._build_database_dataframe(
-        handler, _FakeDbService(spark_session), meta, request_contexts=[{}]
+        handler, _FakeDbService(extract_df), meta, request_contexts=[{}]
     )
     assert out is not None
     assert out.columns == ["user_id"]
 
 
-def test_build_database_dataframe_single_extract_with_multiple_contexts(
-    spark_session: SparkSession,
-) -> None:
+def test_build_database_dataframe_single_extract_with_multiple_contexts(patch_spark_col) -> None:
     """Multiple request contexts must not re-run JDBC extract or duplicate rows."""
     handler = object.__new__(DynamicHandler)
-    handler.spark = spark_session
+    handler.spark = MagicMock()
     handler.logger = get_logger("test_dynamic_handler_db")
 
+    extract_df = _make_extract_df(n_select_cols=2)
     rc = ResourceConfig(method="GET", database_schema="public", database_table="users")
     meta = ResourceMetadata(
         source_name="pg",
@@ -110,7 +147,7 @@ def test_build_database_dataframe_single_extract_with_multiple_contexts(
         config=rc,
     )
 
-    fake = _FakeDbService(spark_session)
+    fake = _FakeDbService(extract_df)
     contexts = [{"batch": 1}, {"batch": 2}, {"batch": 3}]
     out = DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=contexts)
 
@@ -120,11 +157,12 @@ def test_build_database_dataframe_single_extract_with_multiple_contexts(
     assert set(out.columns) == {"id", "label"}
 
 
-def test_build_database_dataframe_no_contexts_no_extract(spark_session: SparkSession) -> None:
+def test_build_database_dataframe_no_contexts_no_extract() -> None:
     handler = object.__new__(DynamicHandler)
-    handler.spark = spark_session
+    handler.spark = MagicMock()
     handler.logger = get_logger("test_dynamic_handler_db")
 
+    extract_df = _make_extract_df(n_select_cols=2)
     rc = ResourceConfig(method="GET", database_schema="public", database_table="users")
     meta = ResourceMetadata(
         source_name="pg",
@@ -134,8 +172,37 @@ def test_build_database_dataframe_no_contexts_no_extract(spark_session: SparkSes
         config=rc,
     )
 
-    fake = _FakeDbService(spark_session)
+    fake = _FakeDbService(extract_df)
     out = DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=[])
 
     assert fake.extract_invocations == 0
     assert out is None
+
+
+def test_build_database_dataframe_raises_when_configured_source_column_missing(
+    patch_spark_col,
+) -> None:
+    handler = object.__new__(DynamicHandler)
+    handler.spark = MagicMock()
+    handler.logger = get_logger("test_dynamic_handler_db")
+
+    extract_df = _make_extract_df(n_select_cols=2)
+    rc = ResourceConfig(
+        method="GET",
+        database_schema="public",
+        database_table="users",
+        fields=[SchemaField(name="user_id", source="missing_col")],
+    )
+    meta = ResourceMetadata(
+        source_name="pg",
+        resource_name="users",
+        dependencies=set(),
+        batch_inputs={},
+        config=rc,
+    )
+    fake = _FakeDbService(extract_df)
+    fake.close = MagicMock()
+
+    with pytest.raises(HandlerError, match="Configured field source"):
+        DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=[{}])
+    fake.close.assert_called_once()

@@ -33,7 +33,7 @@ _INCLUDED_SUBTREES: tuple[tuple[str, str], ...] = (
 def resolve_local_config_root(config_path: str | None = None) -> Path:
     """
     Match runtime ``CONFIG_PATH`` resolution: absolute paths as-is; otherwise
-    ``<repo>/config/<segment>`` (default segment ``.`` → ``config/``).
+    ``<repo>/config/<segment>`` (default segment ``.`` -> ``config/``).
     """
     raw = (config_path if config_path is not None else os.environ.get("CONFIG_PATH", ".")).strip()
     p = Path(raw)
@@ -147,7 +147,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     args = list(argv if argv is not None else sys.argv[1:])
     if len(args) < 1 or args[0] in ("-h", "--help"):
         print(
-            "Usage: python -m src.utils.s3_config_push <s3_uri> [local_config_dir]\n\n"
+            "Usage: python -m scripts.s3_config_push <s3_uri> [local_config_dir]\n\n"
             "Upload defaults.yml, sources/**/*.yml, and queries/**/*.sql from the\n"
             "given directory (default: CONFIG_PATH resolved like runtime, usually repo config/).",
             file=sys.stderr if args and args[0] not in ("-h", "--help") else sys.stdout,

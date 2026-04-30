@@ -7,6 +7,7 @@ import pytest
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
+from src.loader.object_store_loader import ObjectStoreLoader, retry_on_transient_storage_error
 from src.utils.exceptions import LoaderError
 
 
@@ -174,50 +175,42 @@ def test_loading_base_uri_unknown_destination() -> None:
         loading_base_uri(cfg)
 
 
-@pytest.fixture
-def mocked_spark() -> MagicMock:
-    spark = MagicMock()
-    spark.sparkContext._jsc.hadoopConfiguration.return_value = MagicMock(name="hadoop_conf")
-    spark.sparkContext._jvm = MagicMock(name="jvm")
-    return spark
-
-
-def test_resolve_path_joins_and_trailing_slash(mocked_spark: MagicMock) -> None:
-    store = SparkFilesystemObjectStore(mocked_spark)
+def test_resolve_path_joins_and_trailing_slash(loader_spark: MagicMock) -> None:
+    store = SparkFilesystemObjectStore(loader_spark)
     assert store.resolve_path("s3a://b", "p", "q") == "s3a://b/p/q"
     assert store.resolve_path("s3a://b/", "p/", "/q/") == "s3a://b/p/q"
     assert store.resolve_path("file:///tmp", trailing_slash=True) == "file:///tmp/"
 
 
-def test_exists(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_exists(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     fs.exists.return_value = True
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
     path_obj = MagicMock()
     jvm.org.apache.hadoop.fs.Path.return_value = path_obj
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     assert store.exists("s3a://b/path") is True
     jvm.org.apache.hadoop.fs.Path.assert_called_once()
     fs.exists.assert_called_once_with(path_obj)
 
 
-def test_delete_when_present(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_delete_when_present(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     fs.exists.return_value = True
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
     path_obj = MagicMock()
     jvm.org.apache.hadoop.fs.Path.return_value = path_obj
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     store.delete("s3a://b/tmp", recursive=True)
     fs.delete.assert_called_once_with(path_obj, True)
 
 
-def test_move_success(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_move_success(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     fs.rename.return_value = True
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
@@ -225,50 +218,81 @@ def test_move_success(mocked_spark: MagicMock) -> None:
     dst = MagicMock()
     jvm.org.apache.hadoop.fs.Path.side_effect = [src, dst]
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     store.move("s3a://b/a", "s3a://b/b")
     fs.rename.assert_called_once_with(src, dst)
 
 
-def test_move_failure_raises_loader_error(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_move_failure_raises_loader_error(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     fs.rename.return_value = False
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
     jvm.org.apache.hadoop.fs.Path.side_effect = [MagicMock(), MagicMock()]
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     with pytest.raises(LoaderError, match="Failed to move"):
         store.move("s3a://b/a", "s3a://b/b")
 
 
-def test_glob_first_part_file(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_glob_first_part_file(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     status = MagicMock()
     status.getPath.return_value.toString.return_value = "s3a://b/out/part-00000"
     fs.globStatus.return_value = [status]
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     assert store.glob_first_part_file("s3a://b/out") == "s3a://b/out/part-00000"
 
 
-def test_glob_first_part_file_empty(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_glob_first_part_file_empty(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     fs.globStatus.return_value = []
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     assert store.glob_first_part_file("s3a://b/out") is None
 
 
-def test_is_empty_directory(mocked_spark: MagicMock) -> None:
-    jvm = mocked_spark.sparkContext._jvm
+def test_is_empty_directory(loader_spark: MagicMock) -> None:
+    jvm = loader_spark.sparkContext._jvm
     fs = MagicMock()
     fs.exists.return_value = False
     jvm.org.apache.hadoop.fs.FileSystem.get.return_value = fs
 
-    store = SparkFilesystemObjectStore(mocked_spark)
+    store = SparkFilesystemObjectStore(loader_spark)
     assert store.is_empty_directory("s3a://b/missing") is True
+
+
+def test_object_store_loader_generate_table_path_uses_object_store() -> None:
+    loader = ObjectStoreLoader()
+    loader.spark = MagicMock(name="spark")
+    loader._object_store = MagicMock(name="object_store")
+    loader._object_store.resolve_path.return_value = "s3a://bucket/rest_api/foo/"
+
+    path = loader._generate_table_path("s3a://bucket", "foo", source_type="rest_api")
+
+    assert path == "s3a://bucket/rest_api/foo/"
+    loader._object_store.resolve_path.assert_called_once_with(
+        "s3a://bucket", "rest_api/foo", trailing_slash=True
+    )
+
+
+def test_retry_on_transient_storage_error_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("src.loader.object_store_loader.time.sleep", lambda _: None)
+    attempts = {"count": 0}
+
+    @retry_on_transient_storage_error(max_retries=3, delay=0)
+    def flaky_operation():
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("SocketTimeoutException while writing")
+        return "ok"
+
+    assert flaky_operation() == "ok"
+    assert attempts["count"] == 3

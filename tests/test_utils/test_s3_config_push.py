@@ -4,11 +4,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 from src.utils.s3_config_push import (
     iter_operator_config_files,
     parse_s3_uri,
     push_config_to_s3,
+    resolve_local_config_root,
 )
 
 
@@ -94,3 +96,42 @@ def test_push_config_to_s3_empty_raises(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="No operator config files"):
         push_config_to_s3("s3://b/p", tmp_path)
+
+
+def test_resolve_local_config_root_absolute(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    assert resolve_local_config_root(str(cfg.resolve())) == cfg.resolve()
+
+
+def test_resolve_local_config_root_relative(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CONFIG_PATH", "staging")
+    with patch("src.utils.s3_config_push.repository_root", return_value=Path("/repo")):
+        assert resolve_local_config_root() == Path("/repo/config/staging").resolve()
+
+
+def test_push_config_to_s3_wraps_client_error(tmp_path: Path) -> None:
+    (tmp_path / "defaults.yml").write_text("x", encoding="utf-8")
+    mock_client = MagicMock()
+    mock_client.upload_file.side_effect = ClientError(
+        {"Error": {"Code": "500", "Message": "err"}}, "PutObject"
+    )
+    with patch("src.utils.s3_config_push.boto3.client", return_value=mock_client):
+        with pytest.raises(RuntimeError, match="Failed to upload"):
+            push_config_to_s3("s3://b/p", tmp_path)
+
+
+def test_main_cli_help_and_upload(tmp_path: Path, capsys) -> None:
+    from src.utils import s3_config_push as m
+
+    with pytest.raises(SystemExit) as exc:
+        m.main(["--help"])
+    assert exc.value.code == 0
+    assert "Usage" in capsys.readouterr().out
+
+    (tmp_path / "defaults.yml").write_text("x", encoding="utf-8")
+    mock_client = MagicMock()
+    with patch("src.utils.s3_config_push.boto3.client", return_value=mock_client):
+        m.main(["s3://b/pre", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "Uploaded" in out

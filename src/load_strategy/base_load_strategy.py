@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.readwriter import DataFrameWriter
 
 from src.config.config_models import LoadingConfig
@@ -14,11 +14,13 @@ class BaseLoadStrategy(ABC):
 
     def __init__(
         self,
+        spark: SparkSession,
         object_store: ObjectStore,
         base_uri: str,
         config: LoadingConfig,
         source_type: Optional[str],
     ) -> None:
+        self.spark = spark
         self.object_store = object_store
         self.base_uri = base_uri
         self.config = config
@@ -143,9 +145,15 @@ class BaseLoadStrategy(ABC):
 
         return writer
 
-    @abstractmethod
-    def resolve_identifier(self) -> str:
-        """Return the destination path or table identifier for this load strategy."""
+    def resolve_identifier(self):
+        """
+        Resolve Table Identifier Path for Delta Lake
+         - For Delta Lake, the identifier is typically the path to the Delta table in the storage system (e.g., S3, HDFS, or local filesystem).
+         - The path should point to the directory containing the Delta Lake table's metadata and data files.
+         - Example: "s3://my-bucket/delta-tables/my-table" or "hdfs://namenode:8020/delta-tables/my-table" or "file:///path/to/delta-tables/my-table"
+         - Ensure that the path is correctly formatted and accessible based on your storage system and permissions.
+        """
+        return self._generate_table_path()
 
     @abstractmethod
     def table_exists(self) -> bool:
@@ -160,13 +168,3 @@ class BaseLoadStrategy(ABC):
         """Write the given DataFrame to the destination identified by this strategy, using
         the configured write options.
         """
-
-    @abstractmethod
-    def perform_merge(
-        self,
-        df: DataFrame,
-        identifier: str,
-        merge_keys: list[str],
-        options: Dict[str, Any],
-    ) -> None:
-        """Execute merge/upsert logic for this strategy."""

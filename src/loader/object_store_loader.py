@@ -12,6 +12,7 @@ from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
+from src.load_strategy import LoadStrategyFactory
 from src.loader.base_loader import BaseLoader
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.exceptions import LoaderError
@@ -406,62 +407,33 @@ class ObjectStoreLoader(BaseLoader):
 
         df = self._prepare_dataframe_for_load(data, schema, config)
 
-        # Branch based on format type
-        if config.format == LoadingFormat.DELTA:
-            # Delta format: write directly to final directory location
-            return self._load_delta(
-                df, config, base_uri=base_uri, source_type=source_type, **kwargs
+        if config.format not in [LoadingFormat.DELTA, LoadingFormat.ICEBERG]:
+            self.logger.warning(
+                "Using file-based load strategy for non-table format",
+                extra_fields={"format": config.format},
             )
-        elif config.format == LoadingFormat.ICEBERG:
-            # Iceberg format: write directly to final directory location
-            return self._load_iceberg(
-                df, config, base_uri=base_uri, source_type=source_type, **kwargs
-            )
-        else:
-            # Parquet or other file-based formats: use existing file-based logic
+
             return self._load_file_based(
                 df, config, base_uri=base_uri, source_type=source_type, **kwargs
             )
 
-    def _table_exists(self, path: str, table_format: LoadingFormat) -> bool:
-        """
-        Check if a table exists at the given path for the requested table format.
+        # initialize load_strategy
+        load_strategy = LoadStrategyFactory.create_load_strategy(
+            self.spark,
+            self.object_store,
+            base_uri,
+            config,
+            source_type=source_type or "",
+        )
 
-        Validates the presence of the format-specific metadata directory:
-        - Delta: `_delta_log`
-        - Iceberg: `metadata`
+        # use load_strategy to write data for table formats (Delta, Iceberg)
+        load_strategy.write(df, **kwargs)
 
-        Args:
-            path: URI path to the table
-            table_format: Table format to validate
-
-        Returns:
-            bool: True if the table exists, False otherwise
-        """
-        metadata_directories = {
-            LoadingFormat.DELTA: "_delta_log",
-            LoadingFormat.ICEBERG: "metadata",
-        }
-        metadata_dir = metadata_directories.get(table_format)
-
-        if not metadata_dir:
-            return False
-
-        try:
-            store = self.object_store
-            metadata_path = store.resolve_path(path.rstrip("/"), metadata_dir)
-            return store.exists(metadata_path)
-
-        except Exception as e:
-            self.logger.trace(
-                "Error checking if table exists, assuming it doesn't",
-                extra_fields={
-                    "path": path,
-                    "format": table_format.value,
-                    "error": str(e),
-                },
+        if config.format == LoadingFormat.ICEBERG:
+            # Iceberg format: write directly to final directory location
+            return self._load_iceberg(
+                df, config, base_uri=base_uri, source_type=source_type, **kwargs
             )
-            return False
 
     def destination_exists(
         self,
@@ -505,12 +477,16 @@ class ObjectStoreLoader(BaseLoader):
         except ValueError:
             return False
 
-        path = self._generate_table_path(
-            base_uri=base_uri,
-            prefix=config.prefix,
-            source_type=source_type,
+        # Setup LoadStrategy and check if table exists at the generated path.
+        load_strategy = LoadStrategyFactory.create_load_strategy(
+            self.spark,
+            self.object_store,
+            base_uri,
+            config,
+            source_type=source_type or "",
         )
-        return self._table_exists(path, config.format)
+
+        return load_strategy.table_exists()
 
     def _perform_iceberg_merge(
         self,
@@ -849,11 +825,6 @@ class ObjectStoreLoader(BaseLoader):
             LoaderError: If loading fails or configuration is invalid
         """
         try:
-            # Generate Iceberg table path (directory-based)
-            final_path = self._generate_table_path(
-                base_uri=base_uri, prefix=config.prefix, source_type=source_type
-            )
-
             self.logger.trace(
                 "Writing Iceberg table",
                 extra_fields={
@@ -972,54 +943,6 @@ class ObjectStoreLoader(BaseLoader):
                         "Failed to unset Iceberg warehouse configuration after write",
                         extra_fields={"error": str(e), "warehouse": base_uri.rstrip("/")},
                     )
-
-    def _load_delta(
-        self,
-        df: DataFrame,
-        config: LoadingConfig,
-        *,
-        base_uri: str,
-        source_type: Optional[str] = None,
-        **kwargs,
-    ) -> str:
-        """
-        Load data as Delta table with support for multiple save modes.
-
-        Delta tables are stored as directories, not single files. Supports three save modes:
-        - **overwrite** (default): Replace all existing data in the table
-        - **append**: Add new data without removing existing data
-        - **merge**: Upsert on merge_keys; updates only columns present in both source
-          and target, inserts fill missing target-only columns with typed NULL (see
-          _perform_delta_merge). Append/overwrite still use mergeSchema for new source columns.
-
-        Args:
-            df: DataFrame to write
-            config: Loading configuration (must include merge_keys for merge mode)
-            source_type: Optional source type to prepend to the path
-            **kwargs: Additional arguments for specific formats
-
-        Returns:
-            str: Delta table path
-
-        Raises:
-            LoaderError: If loading fails or configuration is invalid
-        """
-        try:
-            # return final_path
-            pass
-
-        except Exception as e:
-            error_msg = f"Failed to load Delta table: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "destination": config.destination,
-                    "prefix": config.prefix,
-                    "write_mode": config.write_mode,
-                },
-            )
-            raise LoaderError(error_msg) from e
 
     def _load_file_based(
         self,

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from delta.tables import DeltaTable
 from pyspark.sql import Column, DataFrame, SparkSession
@@ -17,20 +17,9 @@ class DeltaStrategy(BaseLoadStrategy):
         object_store: ObjectStore,
         base_uri: str,
         config: LoadingConfig,
-        source_type: str,
+        source_type: Optional[str],
     ):
-        super().__init__(object_store, base_uri, config, source_type)
-        self.spark = spark
-
-    def resolve_identifier(self):
-        """
-        Resolve Table Identifier Path for Delta Lake
-         - For Delta Lake, the identifier is typically the path to the Delta table in the storage system (e.g., S3, HDFS, or local filesystem).
-         - The path should point to the directory containing the Delta Lake table's metadata and data files.
-         - Example: "s3://my-bucket/delta-tables/my-table" or "hdfs://namenode:8020/delta-tables/my-table" or "file:///path/to/delta-tables/my-table"
-         - Ensure that the path is correctly formatted and accessible based on your storage system and permissions.
-        """
-        return self._generate_table_path()
+        super().__init__(spark, object_store, base_uri, config, source_type)
 
     def table_exists(self):
         """
@@ -78,9 +67,6 @@ class DeltaStrategy(BaseLoadStrategy):
                 f"Merge keys not found in DataFrame: {missing_keys}. "
                 f"Available columns: {df.columns}"
             )
-
-        if not self.spark:
-            raise LoaderError("Spark session not set. Call set_spark_session first.")
 
         try:
             # Load the target Delta table
@@ -188,6 +174,7 @@ class DeltaStrategy(BaseLoadStrategy):
                     "format": LoadingFormat.DELTA,
                     "mode": "append",
                     "mergeSchema": "true",  # Enable schema evolution
+                    **kwargs.get("write_options", {}),
                 }
                 if self.config.compression:
                     write_options["compression"] = self.config.compression
@@ -211,6 +198,7 @@ class DeltaStrategy(BaseLoadStrategy):
                 "format": LoadingFormat.DELTA,
                 "mode": self.config.write_mode,
                 "mergeSchema": "true",  # Enable schema evolution
+                **kwargs.get("write_options", {}),
             }
             if self.config.compression:
                 write_options["compression"] = self.config.compression

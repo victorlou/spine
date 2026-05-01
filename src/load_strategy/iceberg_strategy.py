@@ -31,10 +31,6 @@ class IcebergStrategy(BaseLoadStrategy):
     ):
         super().__init__(spark, object_store, base_uri, config, source_type)
 
-    def resolve_identifier(self) -> str:
-        """Resolve the Iceberg catalog identifier for the configured table location."""
-        return self._catalog_identifier_from_location(self.resolve_table_location())
-
     def _catalog_identifier_from_location(self, table_location: str) -> str:
         """
         Convert a warehouse-relative Iceberg table location into a quoted catalog identifier.

@@ -13,6 +13,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - `src/parser/`: lightweight transformations over collected data
 - `src/collector/`: collection/storage strategy during extraction
 - `src/loader/`: destination loading (S3, local, …), Spark writes, and `object_store` / `local_storage` helpers
+- `src/load_strategy/`: table-format write orchestration and Delta/Iceberg strategy implementations
 - `config/`: operator-local YAML and SQL; committed files here are templates and examples
 - `scripts/`: operator CLIs (`python -m scripts.*`) and optional dev helpers
 
@@ -39,6 +40,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 
 - New auth behavior: extend the service/auth configuration model and validation together.
 - New destination: add a loader under `src/loader/`, register it in `src/loader/loader_factory.py` under the **canonical** destination id (see `src/config/loading_schema.py` for object-store destinations, aliases, and `normalize_loading_destination`), and document any new config. If Spark needs filesystem or connector wiring, extend `src/config/config_spark.py` (`SparkSessionConf`), `src/config/spark_runtime.py`, and `defaults.spark_runtime` in the same change set so behavior stays configuration-first.
+- New table format: add a strategy under `src/load_strategy/` and register it in `src/load_strategy/load_strategy_factory.py`. Keep write-mode routing in `BaseLoadStrategy`; implement format-specific simple writes, merge execution, identifier resolution, and existence checks in the concrete strategy instead of adding table-format branches to `ObjectStoreLoader`.
 - New source/service type: implement it under `src/service/`, wire it through the factory/config models, and avoid bypassing planner/handler flow. For a new **relational database** kind that shares the same table/query extract and request-context rules, add its `SourceType` to `is_database_source_type()` in `src/config/config_models.py` (that function is the only database-kind predicate; call it from planner, handler, and validators rather than re-listing types).
 - New transformation or collection behavior should fit the existing parser/collector split rather than being embedded ad hoc in services.
 

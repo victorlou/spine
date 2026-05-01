@@ -2,7 +2,6 @@
 Loader for object storage destinations (S3, GCS, Azure Blob, local) using Spark.
 """
 
-import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -16,6 +15,7 @@ from src.load_strategy import LoadStrategyFactory
 from src.loader.base_loader import BaseLoader
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.exceptions import LoaderError
+from src.utils.path_prefix import prepend_source_type_prefix
 from src.utils.s3_transient_retry import retry_on_transient_storage_error
 
 
@@ -217,56 +217,23 @@ class ObjectStoreLoader(BaseLoader):
             )
             raise LoaderError(error_msg) from e
 
-    def _get_iceberg_table_identifier(self, path: str, iceberg_warehouse_path: str) -> str:
-        """
-        Convert a warehouse-relative Iceberg table path into a quoted catalog identifier.
-
-        Args:
-            path: Fully resolved table path under the Iceberg warehouse root
-            iceberg_warehouse_path: Warehouse root configured for the `iceberg` catalog
-
-        Returns:
-            str: Quoted catalog table identifier
-
-        Raises:
-            LoaderError: If the table identifier cannot be derived from the path
-        """
-        warehouse_root = iceberg_warehouse_path.rstrip("/")
-        path_prefix = f"{warehouse_root}/"
-
-        if not path.startswith(path_prefix):
-            raise LoaderError(
-                f"Cannot derive Iceberg table identifier from path '{path}' with warehouse '{iceberg_warehouse_path}'"
-            )
-
-        table_only_path = path[len(path_prefix) :].strip("/")
-        if not table_only_path:
-            raise LoaderError(
-                f"Cannot derive Iceberg table identifier from path '{path}' with warehouse '{iceberg_warehouse_path}'"
-            )
-
-        table_parts = [part for part in table_only_path.split("/") if part]
-        return "iceberg." + ".".join(f"`{part}`" for part in table_parts)
-
     @retry_on_transient_storage_error()
     def _write_dataframe(
         self,
         df: DataFrame,
         path: str,
         write_options: Dict[str, Any],
-        *,
-        iceberg: bool = False,
-        iceberg_warehouse_path: Optional[str] = None,
     ) -> None:
         """
-        Write a DataFrame to object storage or to a catalog-backed Iceberg table.
+        Write a DataFrame to an object-storage path for file-based formats.
+
+        Table formats use `src.load_strategy` implementations so Delta/Iceberg
+        behavior stays behind the table-format strategy boundary.
 
         Args:
             df: DataFrame to write
             path: Resolved destination path
             write_options: Write options for the DataFrame (includes format, mode, compression, etc.)
-            iceberg: Whether this write targets the configured Iceberg catalog
-            iceberg_warehouse_path: Warehouse root used to derive the Iceberg table identifier
         """
         # Extract format and mode from write_options (create copy to avoid mutating original)
         options_copy = write_options.copy()
@@ -274,7 +241,7 @@ class ObjectStoreLoader(BaseLoader):
         write_mode = options_copy.pop("mode", "overwrite")
 
         # Apply optimizations before writing
-        optimized_df = self._optimize_dataframe(df)
+        optimized_df = df.coalesce(1)
 
         # Write with specified options
         writer = optimized_df.write.format(format_type).mode(write_mode)
@@ -283,36 +250,7 @@ class ObjectStoreLoader(BaseLoader):
         if options_copy:
             writer = writer.options(**options_copy)
 
-        is_delta = format_type == LoadingFormat.DELTA or format_type == "delta"
-        if is_delta:
-            t0 = time.perf_counter()
-            self.logger.trace(
-                "Delta write starting",
-                extra_fields={"path": path, "iceberg_catalog": iceberg},
-            )
-
-        # Iceberg catalog writes must use a catalog table identifier, not a filesystem path.
-        if iceberg:
-            if not iceberg_warehouse_path:
-                raise LoaderError("iceberg_warehouse_path must be provided for Iceberg writes")
-
-            table_identifier = self._get_iceberg_table_identifier(path, iceberg_warehouse_path)
-
-            # Use catalog-aware table writes so append/overwrite can create the table when missing.
-            writer.saveAsTable(table_identifier)
-        else:
-            writer.save(path)
-
-        if is_delta:
-            elapsed = time.perf_counter() - t0
-            self.logger.debug(
-                "Delta write finished",
-                extra_fields={
-                    "path": path,
-                    "elapsed_seconds": round(elapsed, 3),
-                    "iceberg_catalog": iceberg,
-                },
-            )
+        writer.save(path)
 
     def _cleanup_temp_dir(self, store: SparkFilesystemObjectStore, temp_path: str) -> None:
         """
@@ -427,13 +365,7 @@ class ObjectStoreLoader(BaseLoader):
         )
 
         # use load_strategy to write data for table formats (Delta, Iceberg)
-        load_strategy.write(df, **kwargs)
-
-        if config.format == LoadingFormat.ICEBERG:
-            # Iceberg format: write directly to final directory location
-            return self._load_iceberg(
-                df, config, base_uri=base_uri, source_type=source_type, **kwargs
-            )
+        return load_strategy.write(df, **kwargs)
 
     def destination_exists(
         self,
@@ -487,148 +419,6 @@ class ObjectStoreLoader(BaseLoader):
         )
 
         return load_strategy.table_exists()
-
-    def _perform_iceberg_merge(
-        self,
-        df: DataFrame,
-        table_path: str,
-        merge_keys: List[str],
-        iceberg_warehouse_path: str,
-    ) -> None:
-        """
-        Perform an Iceberg MERGE INTO operation (upsert).
-
-        Matched rows update only columns present in both source and target, excluding
-        merge keys from the update set. Unmatched rows insert all target columns, with
-        typed NULLs for target-only columns.
-
-        Args:
-            df: Source DataFrame with data to merge
-            table_path: Filesystem path to the Iceberg table
-            merge_keys: List of column names to use as primary keys for matching
-            iceberg_warehouse_path: Warehouse root configured for the `iceberg` catalog
-
-        Raises:
-            LoaderError: If merge operation fails or merge keys are invalid
-        """
-        if not self.spark:
-            raise LoaderError("Spark session not set. Call set_spark_session first.")
-
-        df_columns_lower = {col.lower() for col in df.columns}
-        missing_keys = [key for key in merge_keys if key.lower() not in df_columns_lower]
-        if missing_keys:
-            raise LoaderError(
-                f"Merge keys not found in DataFrame: {missing_keys}. "
-                f"Available columns: {df.columns}"
-            )
-
-        table_identifier = self._get_iceberg_table_identifier(table_path, iceberg_warehouse_path)
-        source_view = f"iceberg_merge_source_{uuid.uuid4().hex}"
-
-        try:
-            target_df = self.spark.table(table_identifier)
-
-            source_cols_map = {col.lower(): col for col in df.columns}
-            target_cols_map = {col.lower(): col for col in target_df.columns}
-
-            missing_target_keys = [key for key in merge_keys if key.lower() not in target_cols_map]
-            if missing_target_keys:
-                raise LoaderError(
-                    f"Merge keys not found in Iceberg table: {missing_target_keys}. "
-                    f"Available columns: {target_df.columns}"
-                )
-
-            merge_conditions = [
-                f"target.`{target_cols_map[key.lower()]}` = source.`{source_cols_map[key.lower()]}`"
-                for key in merge_keys
-            ]
-
-            target_schema: Dict[str, Any] = {
-                field.name: field.dataType for field in target_df.schema.fields
-            }
-            target_columns: List[str] = list(target_schema.keys())
-            merge_keys_lower = {key.lower() for key in merge_keys}
-
-            update_assignments: List[str] = []
-            insert_columns: List[str] = []
-            insert_values: List[str] = []
-
-            for target_col in target_columns:
-                target_col_lower = target_col.lower()
-
-                # used in both update and insert, so add to insert columns regardless of source match
-                insert_columns.append(f"`{target_col}`")
-
-                # if a column in target is present in source (case-insensitive), we can update and insert from source; otherwise insert NULL
-                if target_col_lower in source_cols_map:
-                    source_col_exact = source_cols_map[target_col_lower]
-                    insert_values.append(f"source.`{source_col_exact}`")
-
-                    if target_col_lower not in merge_keys_lower:
-                        update_assignments.append(f"`{target_col}` = source.`{source_col_exact}`")
-                else:
-                    data_type = target_schema[target_col].simpleString()
-                    insert_values.append(f"CAST(NULL AS {data_type})")
-
-            df.createOrReplaceTempView(source_view)
-
-            merge_sql_lines = [
-                f"MERGE INTO {table_identifier} AS target",
-                f"USING {source_view} AS source",
-                f"ON {' AND '.join(merge_conditions)}",
-            ]
-
-            if update_assignments:
-                merge_sql_lines.append("WHEN MATCHED THEN UPDATE SET")
-                merge_sql_lines.append("  " + ", ".join(update_assignments))
-
-            merge_sql_lines.append(f"WHEN NOT MATCHED THEN INSERT ({', '.join(insert_columns)})")
-            merge_sql_lines.append(f"VALUES ({', '.join(insert_values)})")
-
-            merge_sql = "\n".join(merge_sql_lines)
-
-            self.logger.debug(
-                "Performing Iceberg MERGE operation",
-                extra_fields={
-                    "table_path": table_path,
-                    "table_identifier": table_identifier,
-                    "merge_keys": merge_keys,
-                    "merge_condition": " AND ".join(merge_conditions),
-                    "source_column_count": len(df.columns),
-                    "update_columns": update_assignments,
-                    "insert_columns": insert_columns,
-                },
-            )
-
-            self.spark.sql(merge_sql)
-
-            self.logger.info(
-                "Iceberg MERGE operation completed successfully",
-                extra_fields={
-                    "table_path": table_path,
-                    "table_identifier": table_identifier,
-                    "merge_keys": merge_keys,
-                },
-            )
-
-        except Exception as e:
-            error_msg = f"Failed to perform Iceberg MERGE operation: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "table_path": table_path,
-                    "table_identifier": table_identifier,
-                    "merge_keys": merge_keys,
-                },
-            )
-            raise LoaderError(error_msg) from e
-        finally:
-            if self.spark:
-                try:
-                    self.spark.catalog.dropTempView(source_view)
-                except Exception:
-                    pass
 
     def _prepare_dataframe_for_load(
         self,
@@ -795,155 +585,6 @@ class ObjectStoreLoader(BaseLoader):
             )
             raise LoaderError(error_msg) from e
 
-    def _load_iceberg(
-        self,
-        df: DataFrame,
-        config: LoadingConfig,
-        *,
-        base_uri: str,
-        source_type: Optional[str] = None,
-        **kwargs,
-    ) -> str:
-        """
-        Load data as an Iceberg table with support for append, overwrite, and merge.
-
-        Iceberg tables are stored as directories managed by the configured `iceberg`
-        catalog. Append and overwrite use catalog-aware writes. Merge uses SQL
-        `MERGE INTO` against the catalog table identifier derived from the resolved
-        table path.
-
-        Args:
-            df: DataFrame to write
-            config: Loading configuration (must include merge_keys for merge mode)
-            source_type: Optional source type to prepend to the path
-            **kwargs: Additional arguments for specific formats
-
-        Returns:
-            str: Iceberg table path
-
-        Raises:
-            LoaderError: If loading fails or configuration is invalid
-        """
-        try:
-            self.logger.trace(
-                "Writing Iceberg table",
-                extra_fields={
-                    "table_path": final_path,
-                    "write_mode": config.write_mode,
-                    "has_merge_keys": config.merge_keys is not None,
-                },
-            )
-
-            # Register the Iceberg catalog warehouse root for this write so the derived
-            # catalog table identifier resolves to the same filesystem location as final_path.
-            if self.spark:
-                self.spark.conf.set("spark.sql.catalog.iceberg.warehouse", base_uri.rstrip("/"))
-
-            if config.write_mode == "merge":
-                if config.merge_keys is None:
-                    raise LoaderError("merge_keys must be provided when write_mode is 'merge'")
-
-                # First write creates the table using append semantics. Subsequent writes
-                # use Iceberg MERGE INTO for upsert behavior.
-                if not self._table_exists(final_path, LoadingFormat.ICEBERG):
-                    self.logger.debug(
-                        "Iceberg table does not exist, creating it first",
-                        extra_fields={"table_path": final_path},
-                    )
-                    write_options = {
-                        "format": LoadingFormat.ICEBERG,
-                        "mode": "append",
-                        "mergeSchema": "true",
-                        **kwargs.get("write_options", {}),
-                    }
-                    if config.compression:
-                        write_options["compression"] = config.compression
-
-                    self._write_dataframe(
-                        df,
-                        final_path,
-                        write_options,
-                        iceberg=True,
-                        iceberg_warehouse_path=base_uri,
-                    )
-                else:
-                    self._perform_iceberg_merge(
-                        df,
-                        final_path,
-                        config.merge_keys,
-                        base_uri,
-                    )
-
-            elif config.write_mode == "append":
-                write_options = {
-                    "format": LoadingFormat.ICEBERG,
-                    "mode": "append",
-                    "mergeSchema": "true",
-                    **kwargs.get("write_options", {}),
-                }
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                self._write_dataframe(
-                    df,
-                    final_path,
-                    write_options,
-                    iceberg=True,
-                    iceberg_warehouse_path=base_uri,
-                )
-
-            else:
-                write_options = {
-                    "format": LoadingFormat.ICEBERG,
-                    "mode": config.write_mode,
-                    "mergeSchema": "true",
-                    **kwargs.get("write_options", {}),
-                }
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                self._write_dataframe(
-                    df,
-                    final_path,
-                    write_options,
-                    iceberg=True,
-                    iceberg_warehouse_path=base_uri,
-                )
-
-            self.logger.info(
-                "Successfully loaded Iceberg table",
-                extra_fields={
-                    "destination": final_path,
-                    "write_mode": config.write_mode,
-                    "merge_keys": config.merge_keys if config.write_mode == "merge" else None,
-                },
-            )
-
-            return final_path
-
-        except Exception as e:
-            error_msg = f"Failed to load Iceberg table: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "destination": config.destination,
-                    "prefix": config.prefix,
-                    "write_mode": config.write_mode,
-                },
-            )
-            raise LoaderError(error_msg) from e
-        finally:
-            # Clean up the warehouse path from Spark configuration to avoid side effects on other operations
-            if self.spark:
-                try:
-                    self.spark.conf.unset("spark.sql.catalog.iceberg.warehouse")
-                except Exception as e:
-                    self.logger.trace(
-                        "Failed to unset Iceberg warehouse configuration after write",
-                        extra_fields={"error": str(e), "warehouse": base_uri.rstrip("/")},
-                    )
-
     def _load_file_based(
         self,
         df: DataFrame,
@@ -969,7 +610,7 @@ class ObjectStoreLoader(BaseLoader):
         temp_path = None
         try:
             # Prepend source type prefix to the prefix
-            prefixed_prefix = self._prepend_source_type_prefix(config.prefix or "data", source_type)
+            prefixed_prefix = prepend_source_type_prefix(config.prefix or "data", source_type)
 
             # Generate paths for file-based format
             final_path, key = self._generate_final_path(

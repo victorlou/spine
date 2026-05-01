@@ -1,16 +1,25 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.readwriter import DataFrameWriter
 
 from src.config.config_models import LoadingConfig
-from src.loader import ObjectStore
+from src.utils.exceptions import LoaderError
 from src.utils.logger import get_logger
+from src.utils.path_prefix import prepend_source_type_prefix
+
+if TYPE_CHECKING:
+    from src.loader.object_store import ObjectStore
 
 
 class BaseLoadStrategy(ABC):
-    """Base class for table/file load strategies backed by an object store."""
+    """Base class for table load strategies backed by an object store."""
+
+    supported_write_modes: Sequence[str] = ("append", "overwrite", "merge")
+    format_display_name = "table"
 
     def __init__(
         self,
@@ -27,64 +36,11 @@ class BaseLoadStrategy(ABC):
         self.source_type = source_type
         self.logger = get_logger(__name__)
 
-    def _get_source_type_prefix(self, source_type: Optional[str]) -> str:
-        """
-        Get the storage prefix segment for a source type.
-
-        Known source types are grouped into stable top-level storage folders:
-        - `rest_api` -> `rest_api`
-        - `python_sdk` -> `sdk`
-        - relational database sources such as `postgresql` and `hana` -> `database`
-
-        Args:
-            source_type: Source type string or enum value.
-
-        Returns:
-            Prefix segment for recognized source types, otherwise an empty string.
-        """
-        if not source_type:
-            return ""
-
-        type_key = str(source_type.value) if hasattr(source_type, "value") else str(source_type)
-
-        source_type_mapping: Dict[str, str] = {
-            "rest_api": "rest_api",
-            "python_sdk": "sdk",
-            "postgresql": "database",
-            "hana": "database",
-        }
-
-        return source_type_mapping.get(type_key, "")
-
-    def _prepend_source_type_prefix(self, prefix: Optional[str], source_type: Optional[str]) -> str:
-        """
-        Prepend the mapped source type segment to a storage prefix.
-
-        Args:
-            prefix: Original storage prefix from loading config.
-            source_type: Source type string or enum value.
-
-        Returns:
-            Prefix with the source type segment prepended when the source type is
-            recognized; otherwise the original prefix or an empty string.
-        """
-        source_type_prefix = self._get_source_type_prefix(source_type)
-
-        if not source_type_prefix:
-            return prefix or ""
-
-        source_type_prefix = source_type_prefix.strip("/")
-        clean_prefix = prefix.strip("/") if prefix else ""
-
-        if clean_prefix:
-            return f"{source_type_prefix}/{clean_prefix}"
-        return source_type_prefix
-
-    def _generate_table_path(self) -> str:
+    def _generate_table_location(self) -> str:
         """
         Generate the object-store URI for a directory-based table.
 
-        The path is built from the strategy's configured `base_uri`, loading
+        The location is built from the strategy's configured `base_uri`, loading
         `config.prefix`, and optional source type prefix. The returned URI includes
         a trailing slash because table formats such as Delta and Iceberg are stored
         as directories containing data files and format-specific metadata.
@@ -92,7 +48,7 @@ class BaseLoadStrategy(ABC):
         Returns:
             Fully resolved table directory URI.
         """
-        full_prefix = self._prepend_source_type_prefix(self.config.prefix, self.source_type)
+        full_prefix = prepend_source_type_prefix(self.config.prefix, self.source_type)
         clean_prefix = full_prefix.strip("/") if full_prefix else ""
 
         if clean_prefix:
@@ -145,26 +101,88 @@ class BaseLoadStrategy(ABC):
 
         return writer
 
-    def resolve_identifier(self):
+    def resolve_table_location(self) -> str:
         """
-        Resolve Table Identifier Path for Delta Lake
-         - For Delta Lake, the identifier is typically the path to the Delta table in the storage system (e.g., S3, HDFS, or local filesystem).
-         - The path should point to the directory containing the Delta Lake table's metadata and data files.
-         - Example: "s3://my-bucket/delta-tables/my-table" or "hdfs://namenode:8020/delta-tables/my-table" or "file:///path/to/delta-tables/my-table"
-         - Ensure that the path is correctly formatted and accessible based on your storage system and permissions.
+        Resolve the object-store location where the table data is stored.
+
+        This is intentionally named as a storage location, not an identifier:
+        catalog-backed formats such as Iceberg can derive a separate catalog
+        identifier from this location, while path-backed formats such as Delta use
+        the location directly for Spark writes and merge operations.
         """
-        return self._generate_table_path()
+        return self._generate_table_location()
+
+    def write(self, df: DataFrame, **kwargs: Any) -> str:
+        """
+        Write a table using the common write-mode orchestration.
+
+        Strategy subclasses own the format-specific mechanics for simple writes,
+        existence checks, and merge execution. The base class owns routing and
+        validation so append, overwrite, and merge modes behave consistently across
+        table formats.
+        """
+        table_location = self.resolve_table_location()
+        write_mode = str(self.config.write_mode)
+
+        if write_mode not in self.supported_write_modes:
+            supported_modes = ", ".join(f"'{mode}'" for mode in self.supported_write_modes)
+            raise LoaderError(
+                f"Unsupported write mode '{write_mode}' for {self.format_display_name}. "
+                f"Supported modes are {supported_modes}."
+            )
+
+        if write_mode == "merge":
+            merge_keys = self._validated_merge_keys()
+            if not self.table_exists():
+                self.logger.debug(
+                    f"{self.format_display_name} table does not exist, creating it first",
+                    extra_fields={"table_location": table_location},
+                )
+                self.write_simple(df, table_location, mode="append", **kwargs)
+            else:
+                self.perform_merge(df, table_location, merge_keys)
+        else:
+            self.write_simple(df, table_location, mode=write_mode, **kwargs)
+
+        self.logger.info(
+            f"Successfully loaded {self.format_display_name} table",
+            extra_fields={
+                "destination": table_location,
+                "write_mode": write_mode,
+                "merge_keys": self.config.merge_keys if write_mode == "merge" else None,
+            },
+        )
+        return table_location
+
+    def _validated_merge_keys(self) -> List[str]:
+        """Return configured merge keys or fail before format-specific merge work starts."""
+        merge_keys = self.config.merge_keys
+        if not merge_keys:
+            raise LoaderError(
+                "Merge keys must be specified in the configuration for merge write mode."
+            )
+        return merge_keys
 
     @abstractmethod
     def table_exists(self) -> bool:
-        """Return whether a table or file already exists for the resolved identifier."""
+        """Return whether a table already exists for the resolved location."""
 
     @abstractmethod
-    def write(
+    def write_simple(
         self,
         df: DataFrame,
+        table_location: str,
+        *,
+        mode: str,
         **kwargs: Any,
-    ) -> str:
-        """Write the given DataFrame to the destination identified by this strategy, using
-        the configured write options.
-        """
+    ) -> None:
+        """Execute an append/overwrite-style write for this table format."""
+
+    @abstractmethod
+    def perform_merge(
+        self,
+        df: DataFrame,
+        table_location: str,
+        merge_keys: List[str],
+    ) -> None:
+        """Execute this table format's merge/upsert operation."""

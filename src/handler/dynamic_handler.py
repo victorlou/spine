@@ -1870,7 +1870,7 @@ class DynamicHandler(BaseHandler):
                 fields = configured_fields
             else:
                 fields = [SchemaField(name=c, source=c) for c in df.columns]
-                self.logger.info(
+                self.logger.trace(
                     "Database extract has no configured fields; inferring output columns from extract",
                     extra_fields={
                         "resource_name": resource_meta.resource_name,

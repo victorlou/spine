@@ -8,7 +8,7 @@ from pyspark.sql import DataFrame, SparkSession
 
 from src.config.config_models import SourceConfig, SourceType, TableReadOptions
 from src.config.settings import Settings
-from src.service.sql_database_service import SqlDatabaseService
+from src.service.sql_database_service import SqlDatabaseService, jdbc_table_option_from_custom_sql
 from src.utils.exceptions import ServiceError
 from src.utils.redis_context import RedisContextManager
 
@@ -70,7 +70,7 @@ class HanaService(SqlDatabaseService):
         table_ref = self._quoted_from_clause(schema, table)
 
         if select_query:
-            query = select_query
+            query = jdbc_table_option_from_custom_sql(select_query)
         else:
             query = f"(SELECT * FROM {table_ref}) AS data_query"
 

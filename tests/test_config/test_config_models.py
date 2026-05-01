@@ -82,6 +82,129 @@ def test_pipeline_config_get_effective_loading_destinations_respects_enabled_fla
     assert cfg.get_effective_loading_destinations() == {"gcs"}
 
 
+def test_get_effective_loading_destinations_skips_disabled_source_without_selection() -> None:
+    """Full-config semantics: disabled sources must not pull Spark object-store packages."""
+    cfg = PipelineConfig(
+        config_root=Path("."),
+        version="1.0",
+        defaults=DefaultsConfig(),
+        queries=[],
+        sources={
+            "disabled_only": SourceConfig(
+                enabled=False,
+                type="rest_api",
+                base_url="https://example.com",
+                resources={
+                    "posts": ResourceConfig(
+                        enabled=True,
+                        path="/posts",
+                        method="GET",
+                        loading={"destination": "s3", "s3_bucket": "bucket-x", "prefix": "a/b"},
+                    ),
+                },
+            ),
+        },
+    )
+    assert cfg.get_effective_loading_destinations() == set()
+
+
+def test_get_effective_loading_destinations_includes_disabled_source_when_cli_selected() -> None:
+    """CLI ``--select`` forces ExecutionPlan inclusion even when ``enabled: false`` on the source."""
+    cfg = PipelineConfig(
+        config_root=Path("."),
+        version="1.0",
+        runtime_selection={"disabled_only": None},
+        defaults=DefaultsConfig(),
+        queries=[],
+        sources={
+            "disabled_only": SourceConfig(
+                enabled=False,
+                type="rest_api",
+                base_url="https://example.com",
+                resources={
+                    "posts": ResourceConfig(
+                        enabled=True,
+                        path="/posts",
+                        method="GET",
+                        loading={"destination": "s3", "s3_bucket": "bucket-x", "prefix": "a/b"},
+                    ),
+                },
+            ),
+        },
+    )
+    assert cfg.get_effective_loading_destinations() == {"s3"}
+
+
+def test_get_effective_loading_destinations_whole_source_selection_respects_disabled_resources() -> (
+    None
+):
+    """``-s source`` (all resources): disabled tables are excluded from the plan and from Spark deps."""
+    cfg = PipelineConfig(
+        config_root=Path("."),
+        version="1.0",
+        runtime_selection={"api": None},
+        defaults=DefaultsConfig(),
+        queries=[],
+        sources={
+            "api": SourceConfig(
+                enabled=True,
+                type="rest_api",
+                base_url="https://example.com",
+                resources={
+                    "on": ResourceConfig(
+                        enabled=True,
+                        path="/on",
+                        method="GET",
+                        loading={"destination": "gcs", "gcs_bucket": "bucket-a", "prefix": "a/b"},
+                    ),
+                    "off": ResourceConfig(
+                        enabled=False,
+                        path="/off",
+                        method="GET",
+                        loading={"destination": "s3", "s3_bucket": "bucket-x", "prefix": "a/b"},
+                    ),
+                },
+            ),
+        },
+    )
+    assert cfg.get_effective_loading_destinations() == {"gcs"}
+
+
+def test_get_effective_loading_destinations_includes_disabled_resource_when_explicitly_selected() -> (
+    None
+):
+    """``-s source:resource``: disabled resource is still executed by the planner; Spark must see its destination."""
+    cfg = PipelineConfig(
+        config_root=Path("."),
+        version="1.0",
+        runtime_selection={"api": {"off"}},
+        defaults=DefaultsConfig(),
+        queries=[],
+        sources={
+            "api": SourceConfig(
+                enabled=True,
+                type="rest_api",
+                base_url="https://example.com",
+                resources={
+                    "on": ResourceConfig(
+                        enabled=True,
+                        path="/on",
+                        method="GET",
+                        loading={"destination": "gcs", "gcs_bucket": "bucket-a", "prefix": "a/b"},
+                    ),
+                    "off": ResourceConfig(
+                        enabled=False,
+                        path="/off",
+                        method="GET",
+                        loading={"destination": "s3", "s3_bucket": "bucket-x", "prefix": "a/b"},
+                    ),
+                },
+            ),
+        },
+    )
+    assert cfg.get_effective_loading_destinations() == {"s3"}
+
+
 # ---------------------------------------------------------------------------
 # InputConfig.format_request_value
 # ---------------------------------------------------------------------------

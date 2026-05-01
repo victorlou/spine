@@ -9,7 +9,7 @@ from src.config.config_models import SourceType, TableReadOptions
 from src.service.hana_service import HanaService
 from src.service.postgres_service import PostgresService
 from src.service.service_factory import ServiceFactory
-from src.service.sql_database_service import SqlDatabaseService
+from src.service.sql_database_service import SqlDatabaseService, jdbc_table_option_from_custom_sql
 from src.utils.exceptions import ServiceError
 
 
@@ -137,6 +137,23 @@ def test_hana_jdbc_url_filters_reserved_and_encodes_values() -> None:
     assert "driver=" not in url
 
 
+def test_jdbc_table_option_from_custom_sql_wraps_bare_select() -> None:
+    assert jdbc_table_option_from_custom_sql("SELECT 1") == "(SELECT 1) AS spine_jdbc_subquery"
+    assert (
+        jdbc_table_option_from_custom_sql("  SELECT 1; \n") == "(SELECT 1) AS spine_jdbc_subquery"
+    )
+
+
+def test_jdbc_table_option_from_custom_sql_passes_through_parenthesized() -> None:
+    wrapped = "(SELECT 1) AS custom_alias"
+    assert jdbc_table_option_from_custom_sql(wrapped) is wrapped
+
+
+def test_jdbc_table_option_from_custom_sql_rejects_empty() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        jdbc_table_option_from_custom_sql("   ;  ")
+
+
 def test_hana_table_label_and_from_clause() -> None:
     hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
     assert hana._table_label_for_log("public", "users") == '"public"."users"'
@@ -147,7 +164,7 @@ def test_hana_table_label_and_from_clause() -> None:
 @pytest.mark.parametrize(
     "select_query,table_read_options,expected_kwargs",
     [
-        ("SELECT 1", None, {"table": "SELECT 1"}),
+        ("SELECT 1", None, {"table": "(SELECT 1) AS spine_jdbc_subquery"}),
         (
             None,
             TableReadOptions(predicates=["id > 10"]),

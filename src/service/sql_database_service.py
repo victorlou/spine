@@ -14,6 +14,24 @@ from src.utils.exceptions import ServiceError
 from src.utils.logger import get_logger
 from src.utils.redis_context import RedisContextManager
 
+_SPARK_JDBC_SUBQUERY_ALIAS = "spine_jdbc_subquery"
+
+
+def jdbc_table_option_from_custom_sql(select_sql: str) -> str:
+    """
+    Format ``database_select_query`` for Spark ``DataFrameReader.jdbc(..., table=...)``.
+
+    Spark expects either a plain table identifier or a derived table of the form
+    ``( SELECT ... ) alias``. Passing a bare ``SELECT`` makes the driver emit invalid SQL
+    (nested ``FROM`` / duplicate ``SELECT``) during schema resolution.
+    """
+    text = select_sql.strip().rstrip(";").strip()
+    if not text:
+        raise ValueError("database_select_query is empty")
+    if text.startswith("("):
+        return text
+    return f"({text}) AS {_SPARK_JDBC_SUBQUERY_ALIAS}"
+
 
 class SqlDatabaseService(BaseSourceService, ABC):
     """Base for SQL sources: Spark-backed reads, shared validation and extract flow."""

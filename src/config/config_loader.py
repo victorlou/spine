@@ -99,6 +99,7 @@ class ConfigLoader:
             # Process configuration
             processed_config = self._process_config(raw_config)
             processed_config["config_root"] = config_path.resolve()
+            processed_config["runtime_selection"] = selection
 
             # Validate with Pydantic
             try:

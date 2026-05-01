@@ -8,7 +8,7 @@ import copy
 import json
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Union
 
 from pydantic import (
     BaseModel,
@@ -1026,7 +1026,11 @@ class ResourceConfig(BaseModel):
 
     database_select_query: Optional[str] = Field(
         default=None,
-        description="Optional full SQL query for extract; when set, schema/table may still be used for logging.",
+        description=(
+            "Optional SELECT for Spark JDBC extract; schema/table stay used for logging. "
+            "Use a plain SELECT statement (trailing semicolons stripped); Spine wraps it as "
+            "``(query) alias`` when needed."
+        ),
     )
     table_read_options: Optional[TableReadOptions] = Field(
         default=None,
@@ -1534,6 +1538,14 @@ class PipelineConfig(BaseModel):
         exclude=True,
         description="Directory with defaults.yml, sources/, and queries/ (set by ConfigLoader)",
     )
+    runtime_selection: Optional[Dict[str, Optional[Set[str]]]] = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "CLI selection passed to ConfigLoader.load_config; used so loading destinations match "
+            "ExecutionPlan when a disabled source is explicitly selected."
+        ),
+    )
     version: str
     defaults: DefaultsConfig
     queries: List[QueriesConfig]
@@ -1595,20 +1607,41 @@ class PipelineConfig(BaseModel):
 
     def get_effective_loading_destinations(self) -> set[str]:
         """
-        Return the set of enabled loading destinations used by enabled resources.
+        Return loading destinations used by resources that contribute to this config scope.
 
-        Resource loading is already merged with defaults in model initialization, so this
-        method reflects effective destination usage for the current selection scope.
+        Resource loading is merged with defaults at model initialization.
+
+        Mirrors :meth:`~src.planner.execution_plan.ExecutionPlan._should_include_source` and
+        :meth:`~src.planner.execution_plan.ExecutionPlan._should_include_resource` when
+        ``runtime_selection`` is set (CLI ``--select``):
+
+        - Explicitly selected disabled sources still contribute destinations.
+        - Whole-source selection (value ``None``) still respects per-resource ``enabled``.
+        - Explicitly selected disabled resources still contribute destinations.
         """
         destinations: set[str] = set()
-        for source in self.sources.values():
+        sel = self.runtime_selection
+        for source_name, source in self.sources.items():
             if not source.enabled:
-                continue
-            for resource in source.resources.values():
-                if not resource.enabled or resource.loading is None:
+                if sel is None or source_name not in sel:
                     continue
-                if resource.loading.enabled:
-                    destinations.add(resource.loading.destination)
+            selected_resources = sel.get(source_name) if sel and source_name in sel else None
+
+            for resource_name, resource in source.resources.items():
+                if sel is not None and selected_resources is not None:
+                    if resource_name not in selected_resources:
+                        continue
+
+                if resource.loading is None or not resource.loading.enabled:
+                    continue
+
+                if not resource.enabled:
+                    if sel is None:
+                        continue
+                    if selected_resources is None:
+                        continue
+
+                destinations.add(resource.loading.destination)
         return destinations
 
 

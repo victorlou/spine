@@ -285,7 +285,9 @@ def test_load_raises_loader_error_on_invalid_base_uri() -> None:
     loader.logger = MagicMock()
     cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format=LoadingFormat.DELTA)
 
-    with patch("src.loader.object_store_loader.loading_base_uri", side_effect=ValueError("bad uri")):
+    with patch(
+        "src.loader.object_store_loader.loading_base_uri", side_effect=ValueError("bad uri")
+    ):
         with pytest.raises(LoaderError, match="bad uri"):
             loader.load([{"id": 1}], cfg)
 
@@ -318,7 +320,9 @@ def test_load_file_based_writes_to_temp_then_moves() -> None:
     loader._move_uri.assert_called_once_with(
         loader.object_store, "s3a://b/tmp/part-0.parquet", "s3a://b/final.parquet"
     )
-    loader._cleanup_temp_dir.assert_called_once_with(loader.object_store, "s3a://b/tmp/spark_writes/k1")
+    loader._cleanup_temp_dir.assert_called_once_with(
+        loader.object_store, "s3a://b/tmp/spark_writes/k1"
+    )
     assert result == "final.parquet"
 
 
@@ -329,7 +333,9 @@ def test_load_file_based_cleans_up_temp_on_write_error() -> None:
     with pytest.raises(LoaderError, match="disk full"):
         loader._load_file_based(df, cfg, base_uri="s3a://b")
 
-    loader._cleanup_temp_dir.assert_called_once_with(loader.object_store, "s3a://b/tmp/spark_writes/k1")
+    loader._cleanup_temp_dir.assert_called_once_with(
+        loader.object_store, "s3a://b/tmp/spark_writes/k1"
+    )
 
 
 def test_load_file_based_raises_when_no_part_file_found() -> None:
@@ -391,7 +397,9 @@ def test_destination_exists_returns_false_for_non_object_store_or_non_table_form
         is False
     )
     assert (
-        loader.destination_exists(cast(LoadingConfig, SimpleNamespace(destination="s3", format="parquet")))
+        loader.destination_exists(
+            cast(LoadingConfig, SimpleNamespace(destination="s3", format="parquet"))
+        )
         is False
     )
 
@@ -399,7 +407,12 @@ def test_destination_exists_returns_false_for_non_object_store_or_non_table_form
 def test_destination_exists_returns_false_when_required_fields_missing_or_no_spark() -> None:
     loader = ObjectStoreLoader()
     loader.set_spark_session(MagicMock())
-    assert loader.destination_exists(LoadingConfig(destination="s3", s3_bucket="b", format=LoadingFormat.DELTA)) is False
+    assert (
+        loader.destination_exists(
+            LoadingConfig(destination="s3", s3_bucket="b", format=LoadingFormat.DELTA)
+        )
+        is False
+    )
 
     no_spark = ObjectStoreLoader()
     cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format=LoadingFormat.DELTA)
@@ -430,7 +443,9 @@ def test_destination_exists_false_when_loading_base_uri_raises() -> None:
     loader.set_spark_session(MagicMock())
     cfg = LoadingConfig(destination="s3", s3_bucket="b", prefix="a/r", format=LoadingFormat.DELTA)
 
-    with patch("src.loader.object_store_loader.loading_base_uri", side_effect=ValueError("bad uri")):
+    with patch(
+        "src.loader.object_store_loader.loading_base_uri", side_effect=ValueError("bad uri")
+    ):
         assert loader.destination_exists(cfg) is False
 
 

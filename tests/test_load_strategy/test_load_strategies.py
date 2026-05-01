@@ -268,7 +268,9 @@ def test_iceberg_table_exists_uses_catalog_and_cleans_warehouse_conf() -> None:
 
     assert strategy.table_exists() is True
 
-    spark.conf.set.assert_called_once_with("spark.sql.catalog.iceberg.warehouse", "file:///warehouse")
+    spark.conf.set.assert_called_once_with(
+        "spark.sql.catalog.iceberg.warehouse", "file:///warehouse"
+    )
     spark.catalog.tableExists.assert_called_once_with("iceberg.`source`.`resource`")
     spark.conf.unset.assert_called_once_with("spark.sql.catalog.iceberg.warehouse")
 

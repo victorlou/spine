@@ -602,14 +602,6 @@ class DynamicHandler(BaseHandler):
                 return resolved_value
             return [resolved_value] if resolved_value is not None else []
 
-        # Single static value
-        if input_config.value is not None:
-            value = input_config.value
-            # If it's a dict, resolve nested values
-            if isinstance(value, dict):
-                value = self._resolve_nested_value_in_dict(input_name, value)
-            return [value]
-
         raise HandlerError(f"No source or value defined for input '{input_name}'")
 
     def _resolve_from_parent_resource(
@@ -1878,7 +1870,7 @@ class DynamicHandler(BaseHandler):
                 fields = configured_fields
             else:
                 fields = [SchemaField(name=c, source=c) for c in df.columns]
-                self.logger.info(
+                self.logger.trace(
                     "Database extract has no configured fields; inferring output columns from extract",
                     extra_fields={
                         "resource_name": resource_meta.resource_name,

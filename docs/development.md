@@ -30,7 +30,7 @@ Without activating the venv, the same tools work as `uv run black …`, `uv run 
 
 ### CI
 
-GitHub Actions runs the same lint commands as above, installs dependencies with **`uv sync --frozen --all-groups`** (from [`uv.lock`](../uv.lock)), and runs **`uv run pytest`** on **pull requests and pushes to `dev` and `main`**, and on **pushes of version tags** (`v*`). A container image is **built and pushed to GHCR on pushes to `main`** (including `latest` and a SHA tag) **and on `v*` tag pushes** (image tagged with the release version). No private package index or repository secrets are required for the default pipeline.
+GitHub Actions runs the same lint commands as above, installs dependencies with **`uv sync --frozen --all-groups`** (from [`uv.lock`](../uv.lock)), and runs **`uv run pytest`** with **`--cov-fail-under=85`** on **pull requests and pushes to `dev` and `main`**, and on **pushes of version tags** (`v*`). A container image is **built and pushed to GHCR on pushes to `main`** (including `latest` and a SHA tag) **and on `v*` tag pushes** (image tagged with the release version). No private package index or repository secrets are required for the default pipeline.
 
 See [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
@@ -76,10 +76,17 @@ ruff check --fix src/ tests/
 ## Testing
 
 ```bash
-pytest
+uv run pytest
 ```
 
-(Or `uv run pytest` without activating the venv.)
+Coverage (same baseline gate used in CI):
+
+```bash
+uv run pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+```
+
+The team target remains 85% line coverage on `src/`; the current gate is a ratchet floor so
+coverage regressions are blocked while tests are expanded intentionally.
 
 ## Debugging
 

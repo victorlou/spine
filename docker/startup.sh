@@ -19,7 +19,7 @@ if [ -n "${SPINE_CONFIG_S3_URI:-}" ]; then
   SYNC_TARGET="${CONFIG_PATH:-/config}"
   mkdir -p "${SYNC_TARGET}"
   echo "[spine-startup] Pulling config from ${SPINE_CONFIG_S3_URI} -> ${SYNC_TARGET}" >&2
-  python -m src.utils.s3_config_pull "${SPINE_CONFIG_S3_URI}" "${SYNC_TARGET}"
+  python -m scripts.s3_config_pull "${SPINE_CONFIG_S3_URI}" "${SYNC_TARGET}"
   export CONFIG_PATH="${SYNC_TARGET}"
   echo "[spine-startup] S3 config pull finished." >&2
 else

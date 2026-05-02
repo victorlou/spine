@@ -21,6 +21,40 @@ jobs:
           echo "owner=${owner}" >> "$GITHUB_OUTPUT"
           echo "repository=${repository}" >> "$GITHUB_OUTPUT"
 
+      # Keep the rolling `dev` tag plus the three newest `dev-<short_sha>` traces; older
+      # trace-only versions are removed here. The next step applies generic retention
+      # for other tags (SHA, and so on).
+      - name: Prune old dev-<sha> package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OWNER="${{ steps.package.outputs.owner }}"
+          PACKAGE="${{ steps.package.outputs.repository }}"
+          KEEP_TRACE=3
+          owner_type="$(gh api "repos/${{ github.repository }}" --jq -r .owner.type)"
+          if [ "${owner_type}" = "Organization" ]; then
+            PKG_ROOT="orgs/${OWNER}/packages/container/${PACKAGE}"
+          else
+            PKG_ROOT="users/${OWNER}/packages/container/${PACKAGE}"
+          fi
+          mapfile -t DELETE_IDS < <(
+            gh api --paginate "${PKG_ROOT}/versions" --jq -r --argjson keep "$KEEP_TRACE" '
+              [
+                .[] | select(
+                  (.metadata.container.tags // []) as $t |
+                  ($t | index("dev") == null) and
+                  ($t | index("latest") == null) and
+                  ($t | map(test("^dev-.+$")) | any)
+                )
+              ] | sort_by(.updated_at) | reverse | .[$keep:] | .[].id
+            '
+          )
+          for id in "${DELETE_IDS[@]}"; do
+            [ -z "${id}" ] && continue
+            gh api --method DELETE "${PKG_ROOT}/versions/${id}" --silent
+          done
+
       - name: Cleanup obsolete GHCR tags and manifests
         uses: jenskeiner/ghcr-container-repository-cleanup-action@v1
         with:
@@ -28,6 +62,6 @@ jobs:
           owner: ${{ steps.package.outputs.owner }}
           repository: ${{ steps.package.outputs.repository }}
           package: ${{ steps.package.outputs.repository }}
-          exclude-tags: ^(?:latest|v.*)$
+          exclude-tags: ^(?:latest|dev|v.*)$
           keep-n-tagged: 10
           keep-n-untagged: 0

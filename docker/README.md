@@ -74,12 +74,21 @@ docker run --rm \
 
 ## CI-built images
 
-On pushes to **`main`** or **`v*` version tags**, GitHub Actions publishes a multi-arch image (manifest list for `linux/amd64` and `linux/arm64`) to `ghcr.io` (see [docs/deployment.md](../docs/deployment.md)). Pull with your organization or user name and the repository name in lowercase, for example `docker pull ghcr.io/victorlou/spine:latest` or `docker pull ghcr.io/victorlou/spine:v1.0.0`.
+On pushes to **`main`**, **`dev`**, or **`v*` version tags**, GitHub Actions publishes a multi-arch image (manifest list for `linux/amd64` and `linux/arm64`) to `ghcr.io` (see [docs/deployment.md](../docs/deployment.md)).
+
+Typical pulls (use your org/user and repo name in lowercase):
+
+- **`docker pull ghcr.io/victorlou/spine:latest`** — tracks **`main`** (release-style default).
+- **`docker pull ghcr.io/victorlou/spine:dev`** — tracks the **latest push to `dev`**; the tag is **mutable**. **`dev-<short_sha>`** pins a recent commit; scheduled cleanup keeps the **three** newest trace tags (plus rolling **`dev`**); see [docs/deployment.md](../docs/deployment.md).
+- **`docker pull ghcr.io/victorlou/spine:v1.0.0`** — immutable release tag.
+
+Pull requests that change **`docker/**`**, **`requirements*.txt`**, or **`src/**`** get a CI Docker build (no push) and a minimal container smoke (`--show-plan`). Pull requests from **`dev`** into **`main`** also run a smoke against the **published** `:dev` image with mounted example config.
 
 Verify published manifest platforms with:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/victorlou/spine:latest
+docker buildx imagetools inspect ghcr.io/victorlou/spine:dev
 ```
 
 Runtime configuration in production should come from your orchestrator (secrets, task env), not from baking `.env` into the image.

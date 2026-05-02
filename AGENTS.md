@@ -58,6 +58,7 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 
 - Keep the `README.md` practical and honest. Personality is fine, but claims should match the implementation.
 - Use `docs/getting-started.md`, `docs/deployment.md`, and `docs/configuration/` as the source of truth for setup and behavior details.
+- GHCR image tags (`latest`, rolling `dev`, short-lived `dev-<short_sha>` traces, `v*`), PR Docker path gates, promotion smoke, and registry cleanup live in `docs/deployment.md`, `docker/README.md`, and `docs/development.md`; update them when CI or publishing behavior changes.
 - Write for someone discovering the project for the first time. Prefer direct, timeless descriptions of behavior and configuration. Avoid framing docs around past releases or repo history (for example “unchanged from earlier versions”, “previously”, “now you can”) unless you are explicitly documenting a breaking migration or upgrade path.
 
 ## GitHub issues

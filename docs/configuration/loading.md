@@ -8,15 +8,16 @@
   - [Azure Blob Storage (ABFS)](#azure-blob-storage-abfs)
   - [Local filesystem](#local-filesystem)
   - [Other object stores](#other-object-stores)
-- [Delta Save Modes](#delta-save-modes)
+- [Table formats and write modes](#table-formats-and-write-modes)
+  - [Delta Lake](#delta-lake)
   - [Overwrite](#overwrite)
   - [Append](#append)
   - [Merge (Upsert)](#merge-upsert)
-- [Iceberg](#iceberg)
+  - [Iceberg](#iceberg)
   - [Append](#append-1)
   - [Overwrite](#overwrite-1)
-  - [Merge (preview)](#merge-preview)
-  - [Current limitations](#current-limitations)
+  - [Merge](#merge)
+  - [Current Iceberg limitations](#current-iceberg-limitations)
 - [Quick reference](#quick-reference)
 - [Spark Runtime Readiness](#spark-runtime-readiness)
 
@@ -95,15 +96,25 @@ At startup validation, the **resolved** directory must already exist and be writ
 
 Spark can write to **`gs://`** or **`abfs://`** (and other schemes) when the correct Hadoop filesystem implementation and credentials are on the classpath and configured. Spine does not ship those connectors; operators add jars and Spark config as usual. Path and filesystem operations go through the Hadoop `FileSystem` layer in `src/loader/object_store.py`.
 
-## Delta Save Modes
+## Table formats and write modes
 
-When using Delta format, control how data is written with the `write_mode` option. Schema evolution is automatically enabled for all modes.
+Table formats are handled by load strategies under `src/load_strategy/`. `ObjectStoreLoader` prepares the Spark DataFrame and resolves the object-store base URI, then delegates Delta and Iceberg table behavior to the matching strategy. The shared strategy layer owns write-mode routing, so table formats behave consistently for `append`, `overwrite`, and `merge`.
 
-**Available modes**: `overwrite` (default), `append`, `merge`
+**Available table formats**: `delta` (default), `iceberg`
+
+**Available table write modes**: `overwrite` (default), `append`, `merge`
+
+For `merge`, `merge_keys` is required and supports composite keys. If the target table does not exist yet, Spine creates it with an append-style write before later runs perform format-specific merge operations.
+
+### Delta Lake
+
+Delta is path-backed in Spine. The resolved table location is the Spark write and merge target, and table existence is checked by looking for the `_delta_log` directory under that location. Delta append/overwrite writes use Spark path writes with `format: "delta"` and schema merge enabled.
+
+Delta merge uses the Delta Lake `DeltaTable.forPath(...)` API. That requires the `delta-spark` Python package and Spark Delta Lake runtime support. Spine imports the Python Delta API lazily when merge is used, so non-Delta and non-merge imports do not fail just because the optional Python API is unavailable.
 
 ### Overwrite
 
-Replace all existing data in the table.
+Replace all existing data in the Delta table.
 
 ```yaml
 loading:
@@ -129,7 +140,7 @@ loading:
 
 ### Merge (Upsert)
 
-Update existing rows and insert new ones based on primary keys.
+Update existing rows and insert new ones based on the configured merge keys.
 
 ```yaml
 loading:
@@ -141,17 +152,13 @@ loading:
   prefix: "source/resource"
 ```
 
-**Notes**
-
-- `merge_keys` is required for merge mode (list of column names)
-- Supports composite keys (multiple columns)
-- Tables are created automatically if they don't exist
-
 ## Iceberg
 
-When using Iceberg format, Spine writes through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, and for local writes it is rooted at the configured `storage_root`. Spine first resolves the final table path from that warehouse root plus the configured `prefix`, then removes the warehouse root from the resolved path and converts the remaining path into a catalog table identifier by replacing `/` with `.` and prefixing it with `iceberg.`. For example, if the warehouse root is `s3a://my-bucket` and the resolved table path is `a://my-bucket/source/resource`, Spine derives the catalog table identifier `iceberg.source.resource`.
+Iceberg is catalog-backed in Spine. The resolved table location still determines where table data and metadata live, but Spark writes and merges go through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, for GCS at `gs://<bucket-name>`, for Azure Blob at `abfs://<container>@<account>.dfs.core.windows.net`, and for local writes at the resolved `storage_root` `file://` URI.
 
-**Available modes**: `overwrite`, `append`, `merge`
+Spine resolves the final table location from the warehouse root plus the configured `prefix`, removes the warehouse root from that location, and converts the remaining path into a quoted catalog table identifier. For example, if the warehouse root is `s3a://my-bucket` and the resolved table location is `s3a://my-bucket/source/resource/`, Spine derives the catalog table identifier ``iceberg.`source`.`resource```.
+
+Iceberg table existence is checked through the Spark catalog using that derived table identifier, not by looking directly for metadata files in object storage.
 
 ### Append
 
@@ -179,7 +186,7 @@ loading:
   prefix: "source/resource"
 ```
 
-### Merge (preview)
+### Merge
 
 Merge mode performs an Iceberg `MERGE INTO` using the configured `merge_keys`. If the table does not exist yet, Spine creates it first and later runs merges against the catalog table.
 
@@ -193,15 +200,14 @@ loading:
   prefix: "source/resource"
 ```
 
-### Current limitations
+### Current Iceberg limitations
 
-Iceberg support is still in an early merge-support phase. Plan around the following current behavior:
+Plan around the following current Iceberg behavior:
 
 - `merge_keys` is required for Iceberg merge mode
 - Merge updates only columns present in both the source data and the existing target table
 - Merge inserts are shaped to the current target schema; target-only columns are filled with typed `NULL`
 - The current merge path does not auto-evolve the target schema before `MERGE INTO`; if the source introduces new columns, use append/overwrite first or evolve the table separately
-- Iceberg table existence is currently detected from filesystem metadata under the resolved table path
 
 ## Quick reference
 
@@ -213,7 +219,7 @@ Iceberg support is still in an early merge-support phase. Plan around the follow
 | `local` | `storage_root`, `prefix` | `storage_root` may be absolute, or **relative to the repository root** (directory containing `src/`). Relative values are resolved when the config is loaded. |
 | *(omitted `defaults.loading`)* | *(built-in default)* | Same as **`local`** with **`storage_root: ".spine/local-output"`** (resolved under the repository root) and **`prefix: "default/output"`**; override per resource or in **`defaults.yml`**. |
 
-For table formats, `format: "delta"` and `format: "iceberg"` both use the `source/resource`-style prefix directly as the table location. For Iceberg, Spine resolves the final table path under the destination-specific warehouse root (`s3://<bucket-name>` for S3, `storage_root` for local), removes that warehouse root, and converts the remaining path into the catalog table name by replacing `/` with `.` and prefixing it with `iceberg.`.
+For table formats, `format: "delta"` and `format: "iceberg"` both resolve the table location from the destination base URI plus the `source/resource`-style prefix. Delta uses that location directly for path-backed writes and merges. Iceberg uses that location for storage, then derives a catalog table identifier by removing the destination-specific warehouse root (`s3a://<bucket-name>` for S3, `gs://<bucket-name>` for GCS, `abfs://...` for Azure Blob, or the resolved local `file://` URI) and quoting the remaining path parts under the `iceberg` catalog.
 
 Filesystem helpers for loaders live under **`src/loader/`** (for example `object_store.py`, `local_storage.py`).
 

@@ -28,6 +28,6 @@ jobs:
           owner: ${{ steps.package.outputs.owner }}
           repository: ${{ steps.package.outputs.repository }}
           package: ${{ steps.package.outputs.repository }}
-          exclude-tags: ^(?:latest|v.*)$
+          exclude-tags: ^(?:latest|dev|v.*)$
           keep-n-tagged: 10
           keep-n-untagged: 0

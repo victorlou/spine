@@ -85,11 +85,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 'Setup yq'
+        uses: dcarbone/install-yq-action@v1
+        with:
+          version: "v4.44.3"
+
       - name: Load configuration files
         run: |
           cp config/defaults.example.yml config/defaults.yml
           mkdir -p config/sources
           cp config/examples/jsonplaceholder.yml config/sources/jsonplaceholder.yml
+          yq e -i '.enabled = true' config/sources/jsonplaceholder.yml
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -157,11 +163,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 'Setup yq'
+        uses: dcarbone/install-yq-action@v1
+        with:
+          version: "v4.44.3"
+
       - name: Prepare example config
         run: |
           mkdir -p .ci/smoke-config/sources
           cp config/defaults.example.yml .ci/smoke-config/defaults.yml
           cp config/examples/jsonplaceholder.yml .ci/smoke-config/sources/jsonplaceholder.yml
+          yq e -i '.enabled = true' .ci/smoke-config/sources/jsonplaceholder.yml
 
       - name: Pull dev image
         run: docker pull ${{ steps.image.outputs.name }}:dev

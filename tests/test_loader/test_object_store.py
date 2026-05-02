@@ -280,7 +280,7 @@ def test_source_type_prefix_can_be_resolved_by_object_store() -> None:
 def test_retry_on_transient_storage_error_retries_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("src.utils.s3_transient_retry.time.sleep", lambda _: None)
+    monkeypatch.setattr("src.utils.transient_storage_retry.time.sleep", lambda _: None)
     attempts = {"count": 0}
 
     @retry_on_transient_storage_error(max_retries=3, delay=0)

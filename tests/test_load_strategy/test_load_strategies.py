@@ -235,8 +235,10 @@ def test_delta_merge_builds_case_insensitive_update_and_insert_maps() -> None:
 
     strategy = DeltaStrategy(MagicMock(), _object_store(), "s3a://bucket", _config(), None)
 
-    with patch("src.load_strategy.delta_strategy.DeltaTable") as delta_cls:
-        delta_cls.forPath.return_value = delta_table
+    delta_cls = MagicMock()
+    delta_cls.forPath.return_value = delta_table
+
+    with patch("src.load_strategy.delta_strategy._get_delta_table", return_value=delta_cls):
         strategy.perform_merge(df, "s3a://bucket/source/resource/", ["id"])
 
     delta_table.alias.return_value.merge.assert_called_once()

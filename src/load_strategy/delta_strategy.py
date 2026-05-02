@@ -2,23 +2,28 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-try:
-    import delta.tables as delta_tables
-except ImportError:  # pragma: no cover - exercised only when optional dependency is absent
-    DeltaTable: Any = None
-else:
-    DeltaTable: Any = delta_tables.DeltaTable
-
 from pyspark.sql import Column, DataFrame, SparkSession
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.utils.exceptions import LoaderError
-from src.utils.s3_transient_retry import retry_on_transient_storage_error
+from src.utils.transient_storage_retry import retry_on_transient_storage_error
 
 from .base_load_strategy import BaseLoadStrategy
 
 if TYPE_CHECKING:
     from src.loader.object_store import ObjectStore
+
+
+def _get_delta_table() -> Any:
+    """Load the DeltaTable API only when Delta merge support is used."""
+    try:
+        from delta.tables import DeltaTable
+    except ImportError as exc:  # pragma: no cover - exercised only when dependency is absent
+        raise LoaderError(
+            "Delta Lake merge requires the delta-spark Python package. "
+            "Install delta-spark and configure Spark with Delta Lake support."
+        ) from exc
+    return DeltaTable
 
 
 class DeltaStrategy(BaseLoadStrategy):
@@ -75,11 +80,6 @@ class DeltaStrategy(BaseLoadStrategy):
 
     def perform_merge(self, df: DataFrame, table_location: str, merge_keys: List[str]) -> None:
         """Perform Delta Lake MERGE operation (upsert)."""
-        if DeltaTable is None:
-            raise LoaderError(
-                "DeltaTable is not available. Please ensure delta-spark is installed."
-            )
-
         df_columns_lower = {col.lower() for col in df.columns}
         missing_keys = [key for key in merge_keys if key.lower() not in df_columns_lower]
         if missing_keys:
@@ -88,8 +88,10 @@ class DeltaStrategy(BaseLoadStrategy):
                 f"Available columns: {df.columns}"
             )
 
+        delta_table_api = _get_delta_table()
+
         try:
-            delta_table = DeltaTable.forPath(self.spark, table_location)
+            delta_table = delta_table_api.forPath(self.spark, table_location)
             target_df = delta_table.toDF()
 
             source_cols_map = {col.lower(): col for col in df.columns}

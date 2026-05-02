@@ -16,7 +16,7 @@ from src.loader.base_loader import BaseLoader
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.exceptions import LoaderError
 from src.utils.path_prefix import prepend_source_type_prefix
-from src.utils.s3_transient_retry import retry_on_transient_storage_error
+from src.utils.transient_storage_retry import retry_on_transient_storage_error
 
 
 class ObjectStoreLoader(BaseLoader):

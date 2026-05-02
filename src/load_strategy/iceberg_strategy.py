@@ -7,7 +7,7 @@ from pyspark.sql import DataFrame, SparkSession
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.utils.exceptions import LoaderError
-from src.utils.s3_transient_retry import retry_on_transient_storage_error
+from src.utils.transient_storage_retry import retry_on_transient_storage_error
 
 from .base_load_strategy import BaseLoadStrategy
 

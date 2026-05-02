@@ -30,9 +30,22 @@ Without activating the venv, the same tools work as `uv run black …`, `uv run 
 
 ### CI
 
-GitHub Actions runs the same lint commands as above, installs dependencies with **`uv sync --frozen --all-groups`** (from [`uv.lock`](../uv.lock)), and runs **`uv run pytest`** with **`--cov-fail-under=85`** on **pull requests and pushes to `dev` and `main`**, and on **pushes of version tags** (`v*`). A container image is **built and pushed to GHCR on pushes to `main`** (including `latest` and a SHA tag) **and on `v*` tag pushes** (image tagged with the release version). No private package index or repository secrets are required for the default pipeline.
+GitHub Actions runs the same lint commands as above, installs dependencies with **`uv sync --frozen --all-groups`** (from [`uv.lock`](../uv.lock)), and runs **`uv run pytest`** with **`--cov-fail-under=85`** on **pull requests and pushes to `dev` and `main`**, and on **pushes of version tags** (`v*`).
 
-See [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+Container publishing:
+
+- **`main`**: push **`latest`** plus SHA tags to GHCR.
+- **`dev`**: push **`dev`** (rolling, mutable) plus **`dev-<short_sha>`** to GHCR; cleanup keeps the **three** newest trace tags besides **`dev`** (see [deployment.md](deployment.md#ci-and-container-images-github-actions)).
+- **`v*` tags**: push version-tagged images.
+
+Pull request Docker checks (see [.github/workflows/ci.yml](../.github/workflows/ci.yml)):
+
+- **Path filter:** a Docker **build** (no push) and **`docker-smoke`** run only when the PR changes **`docker/**`**, **`requirements*.txt`**, or **`src/**`**. Other edits (docs-only, config templates only, and so on) skip those jobs to save CI time; `pyproject.toml` / **`uv.lock`**-only changes do **not** trigger the Docker job unless they also touch those paths—run a local **`docker build -f docker/Dockerfile .`** before merging if you rely on lockfile-only Dockerfile behavior.
+- **Promotion smoke:** PRs with **`base` = `main`** and **`head` = `dev`** run **`dev-image-smoke`**, which pulls the published **`ghcr.io/.../spine:dev`** image and runs **`--show-plan`** with example config. Repository maintainers should treat **`dev-image-smoke`** as a **required check** for **`main`** if merges should be blocked when that step fails.
+
+Workflow triggers include **`ready_for_review`** so marking a draft PR as ready re-runs CI without requiring an empty commit.
+
+No private package index or repository secrets are required for the default pipeline (beyond `GITHUB_TOKEN` permissions declared in the workflow).
 
 ### Pre-commit (git hooks)
 

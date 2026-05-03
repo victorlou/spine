@@ -32,14 +32,14 @@ jobs:
           OWNER="${{ steps.package.outputs.owner }}"
           PACKAGE="${{ steps.package.outputs.repository }}"
           KEEP_TRACE=3
-          owner_type="$(gh api "repos/${{ github.repository }}" --jq -r .owner.type)"
+          owner_type="$(gh api "repos/${{ github.repository }}" --jq '.owner.type' | jq -r .)"
           if [ "${owner_type}" = "Organization" ]; then
             PKG_ROOT="orgs/${OWNER}/packages/container/${PACKAGE}"
           else
             PKG_ROOT="users/${OWNER}/packages/container/${PACKAGE}"
           fi
           mapfile -t DELETE_IDS < <(
-            gh api --paginate "${PKG_ROOT}/versions" --jq -r --argjson keep "$KEEP_TRACE" '
+            gh api --paginate "${PKG_ROOT}/versions" --jq '
               [
                 .[] | select(
                   (.metadata.container.tags // []) as $t |
@@ -47,7 +47,7 @@ jobs:
                   ($t | index("latest") == null) and
                   ($t | map(test("^dev-.+$")) | any)
                 )
-              ] | sort_by(.updated_at) | reverse | .[$keep:] | .[].id
+              ] | sort_by(.updated_at) | reverse | .['"${KEEP_TRACE}"':] | .[].id
             '
           )
           for id in "${DELETE_IDS[@]}"; do

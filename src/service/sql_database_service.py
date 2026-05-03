@@ -24,6 +24,10 @@ def jdbc_table_option_from_custom_sql(select_sql: str) -> str:
     Spark expects either a plain table identifier or a derived table of the form
     ``( SELECT ... ) alias``. Passing a bare ``SELECT`` makes the driver emit invalid SQL
     (nested ``FROM`` / duplicate ``SELECT``) during schema resolution.
+
+    Callers that pass the result as ``dbtable`` with a non-empty custom query should also use
+    :meth:`SqlDatabaseService._jdbc_read_connection_properties`, which turns off Spark JDBC V2
+    LIMIT/OFFSET pushdown so dialects such as SAP HANA accept ``LIMIT`` inside the inner SELECT.
     """
     text = select_sql.strip().rstrip(";").strip()
     if not text:
@@ -141,6 +145,29 @@ class SqlDatabaseService(BaseSourceService, ABC):
                 props[str(k)] = str(v)
         if table_read_options is not None and table_read_options.fetch_size is not None:
             props["fetchsize"] = str(table_read_options.fetch_size)
+        return props
+
+    def _jdbc_read_connection_properties(
+        self,
+        driver: str,
+        table_read_options: Optional[TableReadOptions],
+        select_query: Optional[str],
+    ) -> Dict[str, str]:
+        """
+        JDBC properties for ``DataFrameReader.jdbc`` (Spark data source options + driver props).
+
+        When ``database_select_query`` is set, Spine disables Spark JDBC V2 LIMIT/OFFSET
+        pushdown. Otherwise Spark may inject LIMIT into nested ``dbtable`` subqueries and
+        break dialects (notably SAP HANA) with errors such as syntax near ``SELECT``.
+        These keys are Spark-only; they are not passed to ``Driver.connect``.
+        """
+        props = self._build_connection_properties(driver, table_read_options)
+        if select_query and select_query.strip():
+            return {
+                **props,
+                "pushDownLimit": "false",
+                "pushDownOffset": "false",
+            }
         return props
 
     def _ensure_extract_prerequisites(self) -> None:

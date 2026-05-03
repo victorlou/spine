@@ -1029,7 +1029,8 @@ class ResourceConfig(BaseModel):
         description=(
             "Optional SELECT for Spark JDBC extract; schema/table stay used for logging. "
             "Use a plain SELECT statement (trailing semicolons stripped); Spine wraps it as "
-            "``(query) alias`` when needed."
+            "``(query) alias`` when needed. When set, Spark JDBC LIMIT/OFFSET pushdown is "
+            "disabled so ``LIMIT``/``OFFSET`` in the operator SQL work with nested subqueries."
         ),
     )
     table_read_options: Optional[TableReadOptions] = Field(

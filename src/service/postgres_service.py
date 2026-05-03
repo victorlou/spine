@@ -75,8 +75,8 @@ class PostgresService(SqlDatabaseService):
         else:
             query = f"(SELECT * FROM {table_ref}) AS data_query"
 
-        connection_properties = self._build_connection_properties(
-            self.POSTGRES_JDBC_DRIVER, table_read_options
+        connection_properties = self._jdbc_read_connection_properties(
+            self.POSTGRES_JDBC_DRIVER, table_read_options, select_query
         )
 
         reader = spark_session.read

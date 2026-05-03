@@ -19,6 +19,8 @@ defaults:
     compression: "snappy"
     storage_root: ".spine/local-output"
     # Omit prefix to write under ``{source_name}/{resource_name}`` (set at runtime).
+    # Optional: coalesce before Delta/Iceberg append/overwrite only (see docs/configuration/loading.md).
+    # output_partitions: 1
 
   # For Amazon S3 instead, use something like:
   # (Variable names below are operator-defined examples, not Spine-reserved env vars.)

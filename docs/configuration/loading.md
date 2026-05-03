@@ -9,6 +9,7 @@
   - [Local filesystem](#local-filesystem)
   - [Other object stores](#other-object-stores)
 - [Table formats and write modes](#table-formats-and-write-modes)
+  - [Writer partitioning (`output_partitions`)](#writer-partitioning-output_partitions)
   - [Delta Lake](#delta-lake)
   - [Overwrite](#overwrite)
   - [Append](#append)
@@ -105,6 +106,19 @@ Table formats are handled by load strategies under `src/load_strategy/`. `Object
 **Available table write modes**: `overwrite` (default), `append`, `merge`
 
 For `merge`, `merge_keys` is required and supports composite keys. If the target table does not exist yet, Spine creates it with an append-style write before later runs perform format-specific merge operations.
+
+### Writer partitioning (`output_partitions`)
+
+Optional **`loading.output_partitions`** (positive integer) controls whether Spine **`coalesce`**s the DataFrame immediately **before** Delta or Iceberg **append**, **overwrite**, or **merge** (on the **source** batch only—the existing merge target is not repartitioned):
+
+- **Unset (recommended for large JDBC extracts)** — the DataFrame keeps whatever partitioning it already has (for example one partition per parallel JDBC read when **`table_read_options`** range or predicate mode is configured). Writes stay spread across executors; typical Parquet file count follows Spark task layout and is not fixed by Spine.
+- **Set** — Spine calls **`coalesce(output_partitions)`**, which **only reduces or preserves** partition count (it never increases parallelism). Use **`1`** when you intentionally want a narrow writer after ingest. If the upstream DataFrame already has fewer partitions than this value, Spark leaves the partition count unchanged.
+
+The initial **merge** run when the table does not exist still uses an append-style **`write_simple`**, which applies the same rule; subsequent merges apply **`output_partitions`** to the incoming batch before **`MERGE`**.
+
+**Parquet file writes** (non-table `format`, file-based path in `ObjectStoreLoader`) still apply an internal **`coalesce(1)`** before `save`; use Delta or Iceberg when you need multi-partition writes from config.
+
+See also [Spark JDBC read tuning](overview.md#spark-jdbc-read-tuning-database-resources) in the configuration overview.
 
 ### Delta Lake
 

@@ -122,12 +122,13 @@ class LoadingConfig(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Optional Spark partition count before Delta/Iceberg append or overwrite writes "
-            "(implemented as coalesce). Unset preserves upstream partitioning—for example parallel "
-            "JDBC reads—so writes stay distributed across executors. When set, narrows partitions "
-            "(coalesce never increases partition count). Does not apply to merge-mode source "
-            "DataFrames. Raw Parquet file loads still use a single writer partition in the "
-            "object-store loader."
+            "Optional Spark partition count before Delta/Iceberg writes (implemented as coalesce). "
+            "Applies to append, overwrite, and merge: merge uses this on the incoming source "
+            "DataFrame only (the existing target table is unchanged). Unset preserves upstream "
+            "partitioning—for example parallel JDBC reads. When set, narrows partitions "
+            "(coalesce never increases partition count). Typical output file count follows task "
+            "parallelism but is not strictly equal to this value. Raw Parquet file loads still use "
+            "a single writer partition in the object-store loader."
         ),
     )
     merge_keys: Optional[List[str]] = Field(

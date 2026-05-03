@@ -126,6 +126,8 @@ class IcebergStrategy(BaseLoadStrategy):
                 f"Available columns: {df.columns}"
             )
 
+        df = self._optimize_dataframe(df)
+
         table_identifier = self._catalog_identifier_from_location(table_location)
         source_view = f"iceberg_merge_source_{uuid.uuid4().hex}"
 

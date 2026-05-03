@@ -88,6 +88,8 @@ class DeltaStrategy(BaseLoadStrategy):
                 f"Available columns: {df.columns}"
             )
 
+        df = self._optimize_dataframe(df)
+
         delta_table_api = _get_delta_table()
 
         try:

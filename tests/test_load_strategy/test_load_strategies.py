@@ -172,6 +172,38 @@ def test_base_strategy_rejects_unsupported_write_mode() -> None:
         strategy.write(MagicMock())
 
 
+def test_optimize_dataframe_returns_df_unchanged_when_output_partitions_unset() -> None:
+    strategy = _strategy(_config())
+    df = MagicMock()
+
+    result = strategy._optimize_dataframe(df)
+
+    assert result is df
+    df.coalesce.assert_not_called()
+
+
+def test_optimize_dataframe_coalesces_when_output_partitions_set() -> None:
+    strategy = _strategy(_config(output_partitions=1))
+    coalesced = MagicMock()
+    df = MagicMock()
+    df.coalesce.return_value = coalesced
+
+    result = strategy._optimize_dataframe(df)
+
+    df.coalesce.assert_called_once_with(1)
+    assert result is coalesced
+
+
+def test_optimize_dataframe_coalesces_to_requested_partition_count() -> None:
+    strategy = _strategy(_config(output_partitions=4))
+    df = MagicMock()
+    df.coalesce.return_value = df
+
+    strategy._optimize_dataframe(df)
+
+    df.coalesce.assert_called_once_with(4)
+
+
 def _df_with_writer(columns=None):
     df = MagicMock()
     df.columns = columns or ["id", "name"]

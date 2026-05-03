@@ -59,13 +59,14 @@ class BaseLoadStrategy(ABC):
         """
         Apply common DataFrame optimizations before writing.
 
-        Args:
-            df: Input DataFrame.
-
-        Returns:
-            DataFrame coalesced to one partition for deterministic single-file output.
+        When ``config.output_partitions`` is set the DataFrame is coalesced to that
+        many partitions before writing. When unset the DataFrame is returned as-is,
+        letting Spark decide the number of output files based on its own partitioning
+        — which is the right default for large tables read via parallel JDBC.
         """
-        return df.coalesce(1)
+        if self.config.output_partitions is not None:
+            return df.coalesce(self.config.output_partitions)
+        return df
 
     def _prepare_writer(
         self,

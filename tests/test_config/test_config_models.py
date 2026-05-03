@@ -488,6 +488,26 @@ def test_loading_config_merge_mode_requires_nonempty_merge_keys(merge_keys) -> N
 
 
 # ---------------------------------------------------------------------------
+# LoadingConfig — output_partitions validation
+# ---------------------------------------------------------------------------
+
+
+def test_loading_config_output_partitions_defaults_to_none() -> None:
+    cfg = LoadingConfig(destination="local", storage_root="/tmp")
+    assert cfg.output_partitions is None
+
+
+def test_loading_config_output_partitions_accepts_valid_value() -> None:
+    cfg = LoadingConfig(destination="local", storage_root="/tmp", output_partitions=8)
+    assert cfg.output_partitions == 8
+
+
+def test_loading_config_output_partitions_rejects_zero() -> None:
+    with pytest.raises(ValidationError, match="output_partitions"):
+        LoadingConfig(destination="local", storage_root="/tmp", output_partitions=0)
+
+
+# ---------------------------------------------------------------------------
 # LoadingConfig.destination_dedup_key and destination_details
 # ---------------------------------------------------------------------------
 

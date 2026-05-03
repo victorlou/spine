@@ -118,6 +118,18 @@ class LoadingConfig(BaseModel):
         default=None,
         description="Azure storage account name for destination: azure_blob (Spark abfs://).",
     )
+    output_partitions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional Spark partition count before Delta/Iceberg append or overwrite writes "
+            "(implemented as coalesce). Unset preserves upstream partitioning—for example parallel "
+            "JDBC reads—so writes stay distributed across executors. When set, narrows partitions "
+            "(coalesce never increases partition count). Does not apply to merge-mode source "
+            "DataFrames. Raw Parquet file loads still use a single writer partition in the "
+            "object-store loader."
+        ),
+    )
     merge_keys: Optional[List[str]] = Field(
         default=None,
         description="List of column names to use as primary keys for merge operations. Required when write_mode is 'merge'.",

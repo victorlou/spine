@@ -63,5 +63,5 @@ jobs:
           repository: ${{ steps.package.outputs.repository }}
           package: ${{ steps.package.outputs.repository }}
           exclude-tags: ^(?:latest|dev|v.*)$
-          keep-n-tagged: 10
+          keep-n-tagged: 5
           keep-n-untagged: 0

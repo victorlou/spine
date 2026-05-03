@@ -2,61 +2,21 @@
 Loader for object storage destinations (S3, GCS, Azure Blob, local) using Spark.
 """
 
-import time
 import uuid
 from datetime import UTC, datetime
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from delta.tables import DeltaTable
-from pyspark.sql import Column, DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import StructField, StructType
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
+from src.load_strategy import LoadStrategyFactory
 from src.loader.base_loader import BaseLoader
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
 from src.utils.exceptions import LoaderError
-from src.utils.logger import get_logger
-
-# Common transient I/O error substrings across S3, GCS, and Azure storage drivers.
-_TRANSIENT_STORAGE_ERRORS = (
-    "Connection reset",
-    "SocketException",
-    "SocketTimeoutException",
-    "RequestTimeout",
-    "ServiceUnavailable",
-    "SlowDown",
-)
-
-
-def retry_on_transient_storage_error(max_retries: int = 3, delay: float = 1.0):
-    """Retry decorator for transient object storage I/O errors."""
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception = None
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-                    if any(pattern in str(e) for pattern in _TRANSIENT_STORAGE_ERRORS):
-                        if attempt < max_retries - 1:
-                            logger = get_logger(func.__name__)
-                            logger.warning(
-                                f"Storage operation failed (attempt {attempt + 1}/{max_retries}). "
-                                f"Retrying in {delay} seconds..."
-                            )
-                            time.sleep(delay)
-                            continue
-                    raise
-            raise last_exception
-
-        return wrapper
-
-    return decorator
+from src.utils.path_prefix import prepend_source_type_prefix
+from src.utils.transient_storage_retry import retry_on_transient_storage_error
 
 
 class ObjectStoreLoader(BaseLoader):
@@ -137,87 +97,6 @@ class ObjectStoreLoader(BaseLoader):
         key = f"{timestamp}_{unique_id}.{extension}"
         final = self.object_store.resolve_path(base_uri, clean_prefix, key)
         return final, key
-
-    def _get_source_type_prefix(self, source_type: Optional[str]) -> str:
-        """
-        Get the prefix path segment for a given source type.
-
-        Maps source types to their storage prefixes:
-        - "rest_api" -> "rest_api"
-        - "python_sdk" -> "python_sdk"
-        - Other types can be added as needed
-
-        Args:
-            source_type: Source type (e.g., "rest_api", "python_sdk")
-
-        Returns:
-            str: Source type prefix (e.g., "rest_api", "python_sdk") or empty string if not recognized
-        """
-        if not source_type:
-            return ""
-
-        type_key = source_type.value if hasattr(source_type, "value") else str(source_type)
-
-        # Map source types to their storage prefixes
-        source_type_mapping = {
-            "rest_api": "rest_api",
-            "python_sdk": "sdk",
-            "postgresql": "database",
-            "hana": "database",
-        }
-
-        return source_type_mapping.get(type_key, "")
-
-    def _prepend_source_type_prefix(self, prefix: Optional[str], source_type: Optional[str]) -> str:
-        """
-        Prepend source type prefix to the given prefix.
-
-        Args:
-            prefix: Optional original prefix
-            source_type: Source type (e.g., "rest_api", "python_sdk")
-
-        Returns:
-            str: Prefix with source type prepended (e.g., "rest_api/roundel_ads/accounts", "python_sdk/databricks/...")
-        """
-        source_type_prefix = self._get_source_type_prefix(source_type)
-
-        if not source_type_prefix:
-            return prefix or ""
-
-        # Clean both prefixes
-        source_type_prefix = source_type_prefix.strip("/")
-        clean_prefix = prefix.strip("/") if prefix else ""
-
-        if clean_prefix:
-            return f"{source_type_prefix}/{clean_prefix}"
-        else:
-            return source_type_prefix
-
-    def _generate_table_path(
-        self, base_uri: str, prefix: Optional[str], source_type: Optional[str] = None
-    ) -> str:
-        """
-        Generate a table path for directory-based table formats.
-
-        Table formats such as Delta and Iceberg are stored as directories containing
-        data files and format-specific metadata. This method returns the directory
-        path where the table will be stored. The source type prefix is prepended
-        automatically.
-
-        Args:
-            base_uri: Filesystem base URI
-            prefix: Optional key prefix
-            source_type: Optional source type to prepend to the path
-
-        Returns:
-            str: Table directory path
-        """
-        full_prefix = self._prepend_source_type_prefix(prefix, source_type)
-        clean_prefix = full_prefix.strip("/") if full_prefix else ""
-
-        if clean_prefix:
-            return self.object_store.resolve_path(base_uri, clean_prefix, trailing_slash=True)
-        return self.object_store.resolve_path(base_uri, trailing_slash=True)
 
     def _ensure_dataframe(
         self, data: Union[DataFrame, List[Dict[str, Any]]], schema: Optional[StructType] = None
@@ -338,69 +217,23 @@ class ObjectStoreLoader(BaseLoader):
             )
             raise LoaderError(error_msg) from e
 
-    def _optimize_dataframe(self, df: DataFrame) -> DataFrame:
-        """
-        Apply optimizations to the DataFrame before writing.
-
-        Args:
-            df: Input DataFrame
-
-        Returns:
-            DataFrame: Optimized DataFrame
-        """
-        # Coalesce to single file for consistent output
-        return df.coalesce(1)
-
-    def _get_iceberg_table_identifier(self, path: str, iceberg_warehouse_path: str) -> str:
-        """
-        Convert a warehouse-relative Iceberg table path into a quoted catalog identifier.
-
-        Args:
-            path: Fully resolved table path under the Iceberg warehouse root
-            iceberg_warehouse_path: Warehouse root configured for the `iceberg` catalog
-
-        Returns:
-            str: Quoted catalog table identifier
-
-        Raises:
-            LoaderError: If the table identifier cannot be derived from the path
-        """
-        warehouse_root = iceberg_warehouse_path.rstrip("/")
-        path_prefix = f"{warehouse_root}/"
-
-        if not path.startswith(path_prefix):
-            raise LoaderError(
-                f"Cannot derive Iceberg table identifier from path '{path}' with warehouse '{iceberg_warehouse_path}'"
-            )
-
-        table_only_path = path[len(path_prefix) :].strip("/")
-        if not table_only_path:
-            raise LoaderError(
-                f"Cannot derive Iceberg table identifier from path '{path}' with warehouse '{iceberg_warehouse_path}'"
-            )
-
-        table_parts = [part for part in table_only_path.split("/") if part]
-        return "iceberg." + ".".join(f"`{part}`" for part in table_parts)
-
     @retry_on_transient_storage_error()
     def _write_dataframe(
         self,
         df: DataFrame,
         path: str,
         write_options: Dict[str, Any],
-        *,
-        iceberg: bool = False,
-        iceberg_warehouse_path: Optional[str] = None,
     ) -> None:
         """
-        Write a DataFrame to object storage or to a catalog-backed Iceberg table.
+        Write a DataFrame to an object-storage path for file-based formats.
+
+        Table formats use `src.load_strategy` implementations so Delta/Iceberg
+        behavior stays behind the table-format strategy boundary.
 
         Args:
             df: DataFrame to write
             path: Resolved destination path
             write_options: Write options for the DataFrame (includes format, mode, compression, etc.)
-            iceberg: Whether this write targets the configured Iceberg catalog
-            iceberg_warehouse_path: Warehouse root used to derive the Iceberg table identifier
         """
         # Extract format and mode from write_options (create copy to avoid mutating original)
         options_copy = write_options.copy()
@@ -408,7 +241,7 @@ class ObjectStoreLoader(BaseLoader):
         write_mode = options_copy.pop("mode", "overwrite")
 
         # Apply optimizations before writing
-        optimized_df = self._optimize_dataframe(df)
+        optimized_df = df.coalesce(1)
 
         # Write with specified options
         writer = optimized_df.write.format(format_type).mode(write_mode)
@@ -417,36 +250,7 @@ class ObjectStoreLoader(BaseLoader):
         if options_copy:
             writer = writer.options(**options_copy)
 
-        is_delta = format_type == LoadingFormat.DELTA or format_type == "delta"
-        if is_delta:
-            t0 = time.perf_counter()
-            self.logger.trace(
-                "Delta write starting",
-                extra_fields={"path": path, "iceberg_catalog": iceberg},
-            )
-
-        # Iceberg catalog writes must use a catalog table identifier, not a filesystem path.
-        if iceberg:
-            if not iceberg_warehouse_path:
-                raise LoaderError("iceberg_warehouse_path must be provided for Iceberg writes")
-
-            table_identifier = self._get_iceberg_table_identifier(path, iceberg_warehouse_path)
-
-            # Use catalog-aware table writes so append/overwrite can create the table when missing.
-            writer.saveAsTable(table_identifier)
-        else:
-            writer.save(path)
-
-        if is_delta:
-            elapsed = time.perf_counter() - t0
-            self.logger.debug(
-                "Delta write finished",
-                extra_fields={
-                    "path": path,
-                    "elapsed_seconds": round(elapsed, 3),
-                    "iceberg_catalog": iceberg,
-                },
-            )
+        writer.save(path)
 
     def _cleanup_temp_dir(self, store: SparkFilesystemObjectStore, temp_path: str) -> None:
         """
@@ -539,65 +343,29 @@ class ObjectStoreLoader(BaseLoader):
             },
         )
 
-        # Ensure we have a DataFrame
-        df = self._ensure_dataframe(data, schema)
+        df = self._prepare_dataframe_for_load(data, schema, config)
 
-        # Branch based on format type
-        if config.format == LoadingFormat.DELTA:
-            # Delta format: write directly to final directory location
-            return self._load_delta(
-                df, config, base_uri=base_uri, source_type=source_type, **kwargs
+        if config.format not in [LoadingFormat.DELTA, LoadingFormat.ICEBERG]:
+            self.logger.warning(
+                "Using file-based load strategy for non-table format",
+                extra_fields={"format": config.format},
             )
-        elif config.format == LoadingFormat.ICEBERG:
-            # Iceberg format: write directly to final directory location
-            return self._load_iceberg(
-                df, config, base_uri=base_uri, source_type=source_type, **kwargs
-            )
-        else:
-            # Parquet or other file-based formats: use existing file-based logic
+
             return self._load_file_based(
                 df, config, base_uri=base_uri, source_type=source_type, **kwargs
             )
 
-    def _table_exists(self, path: str, table_format: LoadingFormat) -> bool:
-        """
-        Check if a table exists at the given path for the requested table format.
+        # initialize load_strategy
+        load_strategy = LoadStrategyFactory.create_load_strategy(
+            self.spark,
+            self.object_store,
+            base_uri,
+            config,
+            source_type=source_type or "",
+        )
 
-        Validates the presence of the format-specific metadata directory:
-        - Delta: `_delta_log`
-        - Iceberg: `metadata`
-
-        Args:
-            path: URI path to the table
-            table_format: Table format to validate
-
-        Returns:
-            bool: True if the table exists, False otherwise
-        """
-        metadata_directories = {
-            LoadingFormat.DELTA: "_delta_log",
-            LoadingFormat.ICEBERG: "metadata",
-        }
-        metadata_dir = metadata_directories.get(table_format)
-
-        if not metadata_dir:
-            return False
-
-        try:
-            store = self.object_store
-            metadata_path = store.resolve_path(path.rstrip("/"), metadata_dir)
-            return store.exists(metadata_path)
-
-        except Exception as e:
-            self.logger.trace(
-                "Error checking if table exists, assuming it doesn't",
-                extra_fields={
-                    "path": path,
-                    "format": table_format.value,
-                    "error": str(e),
-                },
-            )
-            return False
+        # use load_strategy to write data for table formats (Delta, Iceberg)
+        return load_strategy.write(df, **kwargs)
 
     def destination_exists(
         self,
@@ -641,283 +409,65 @@ class ObjectStoreLoader(BaseLoader):
         except ValueError:
             return False
 
-        path = self._generate_table_path(
-            base_uri=base_uri,
-            prefix=config.prefix,
-            source_type=source_type,
+        # Setup LoadStrategy and check if table exists at the generated path.
+        load_strategy = LoadStrategyFactory.create_load_strategy(
+            self.spark,
+            self.object_store,
+            base_uri,
+            config,
+            source_type=source_type or "",
         )
-        return self._table_exists(path, config.format)
 
-    def _perform_delta_merge(
-        self, df: DataFrame, delta_path: str, merge_keys: List[str], config: LoadingConfig
-    ) -> None:
-        """
-        Perform Delta Lake MERGE operation (upsert).
+        return load_strategy.table_exists()
 
-        Matched rows: updates only columns present in both source and target (merge keys
-        excluded from the update set). This avoids failures when the source schema is
-        narrower than the table (e.g. upstream dropped a column that still exists in Delta).
-
-        Unmatched rows: inserts all target columns; source columns supply values, and
-        columns only on the target get typed NULL so the insert clause resolves.
-
-        Target schema is read via DeltaTable.toDF() for column names and types. Append /
-        overwrite paths still use mergeSchema for new columns from the source.
-
-        Args:
-            df: Source DataFrame with data to merge
-            delta_path: Path to the Delta table
-            merge_keys: List of column names to use as primary keys for matching
-            config: Loading configuration
-
-        Raises:
-            LoaderError: If merge operation fails or merge keys are invalid
-        """
-        if DeltaTable is None:
-            raise LoaderError(
-                "DeltaTable is not available. Please ensure delta-spark is installed."
-            )
-
-        # Validate that all merge keys exist in the DataFrame
-        df_columns_lower = {col.lower() for col in df.columns}
-        missing_keys = [key for key in merge_keys if key.lower() not in df_columns_lower]
-        if missing_keys:
-            raise LoaderError(
-                f"Merge keys not found in DataFrame: {missing_keys}. "
-                f"Available columns: {df.columns}"
-            )
-
-        if not self.spark:
-            raise LoaderError("Spark session not set. Call set_spark_session first.")
-
-        try:
-            # Load the target Delta table
-            delta_table = DeltaTable.forPath(self.spark, delta_path)
-            target_df = delta_table.toDF()
-
-            # 1. Create a mapping of lowercase source columns to their exact original casing
-            source_cols_map = {col.lower(): col for col in df.columns}
-
-            # Build merge condition using the exact casing from the source dataframe
-            # Format: "target.key1 = updates.key1 AND target.key2 = updates.key2 ..."
-            merge_conditions = [
-                f"target.`{key}` = updates.`{source_cols_map[key.lower()]}`" for key in merge_keys
-            ]
-            merge_condition = " AND ".join(merge_conditions)
-
-            target_schema: Dict[str, Any] = {
-                field.name: field.dataType for field in target_df.schema.fields
-            }
-            target_columns: List[str] = list(target_schema.keys())
-            merge_keys_lower = {key.lower() for key in merge_keys}
-
-            update_set: Dict[str, Union[str, Column]] = {}
-            insert_values: Dict[str, Union[str, Column]] = {}
-
-            # 2. Build the sets using case-agnostic lookups
-            for target_col in target_columns:
-                target_col_lower = target_col.lower()
-
-                # Case-agnostic check: Does the target column exist in the source dataframe?
-                if target_col_lower in source_cols_map:
-                    # Key present in both source and target. Add to update_set and insert_values.
-                    # Match found! Fetch the exact source column name to build the SQL expression
-                    source_col_exact = source_cols_map[target_col_lower]
-
-                    insert_values[target_col] = f"updates.`{source_col_exact}`"
-
-                    # Need to update this column if this merge_key already exists in table
-                    if target_col_lower not in merge_keys_lower:
-                        update_set[target_col] = f"updates.`{source_col_exact}`"
-
-                else:
-                    # No match found. Inject a typed NULL for inserts so new rows don't fail.
-                    data_type = target_schema[target_col].simpleString()
-                    insert_values[target_col] = f"CAST(NULL AS {data_type})"
-
-            self.logger.debug(
-                "Performing Delta MERGE operation",
-                extra_fields={
-                    "delta_path": delta_path,
-                    "merge_keys": merge_keys,
-                    "merge_condition": merge_condition,
-                    "source_column_count": len(df.columns),
-                    "shared_columns": list(update_set.keys()),
-                    "insert_columns": list(insert_values.keys()),
-                },
-            )
-
-            # Perform MERGE: update matched rows for shared columns only and insert all
-            # target columns using typed NULLs for columns missing from the source.
-            merge_builder = delta_table.alias("target").merge(
-                source=df.alias("updates"), condition=merge_condition
-            )
-
-            # Shared non-key columns only (intersection); avoids referencing missing source columns.
-            if update_set:
-                merge_builder = merge_builder.whenMatchedUpdate(set=update_set)
-
-            # Full target row on insert; typed NULL where the source has no column.
-            merge_builder.whenNotMatchedInsert(values=insert_values).execute()
-
-            self.logger.info(
-                "Delta MERGE operation completed successfully",
-                extra_fields={"delta_path": delta_path, "merge_keys": merge_keys},
-            )
-
-        except Exception as e:
-            error_msg = f"Failed to perform Delta MERGE operation: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "delta_path": delta_path,
-                    "merge_keys": merge_keys,
-                },
-            )
-            raise LoaderError(error_msg) from e
-
-    def _perform_iceberg_merge(
+    def _prepare_dataframe_for_load(
         self,
-        df: DataFrame,
-        table_path: str,
-        merge_keys: List[str],
-        iceberg_warehouse_path: str,
-    ) -> None:
+        data: Union[DataFrame, List[Dict[str, Any]]],
+        schema: Optional[StructType],
+        config: LoadingConfig,
+    ) -> DataFrame:
         """
-        Perform an Iceberg MERGE INTO operation (upsert).
+        Convert load input to a DataFrame and apply shared preprocessing before any
+        format-specific load strategy runs.
 
-        Matched rows update only columns present in both source and target, excluding
-        merge keys from the update set. Unmatched rows insert all target columns, with
-        typed NULLs for target-only columns.
-
-        Args:
-            df: Source DataFrame with data to merge
-            table_path: Filesystem path to the Iceberg table
-            merge_keys: List of column names to use as primary keys for matching
-            iceberg_warehouse_path: Warehouse root configured for the `iceberg` catalog
-
-        Raises:
-            LoaderError: If merge operation fails or merge keys are invalid
+        This keeps column cleanup and optional merge-key deduplication consistent for
+        Delta, Iceberg, and file-based writes.
         """
-        if not self.spark:
-            raise LoaderError("Spark session not set. Call set_spark_session first.")
+        df = self._ensure_dataframe(data, schema)
+        df = self._prepare_dataframe_columns(df)
 
-        df_columns_lower = {col.lower() for col in df.columns}
-        missing_keys = [key for key in merge_keys if key.lower() not in df_columns_lower]
-        if missing_keys:
-            raise LoaderError(
-                f"Merge keys not found in DataFrame: {missing_keys}. "
-                f"Available columns: {df.columns}"
-            )
+        # Force deduplicate on merge keys if configured, to avoid non-deterministic
+        # merge failures due to duplicate keys in source data. This is a temporary
+        # workaround until merge logic can handle duplicate keys deterministically.
+        if config.force_nondeterministic_deduplication and config.write_mode == "merge":
+            self.logger.warning("Forcing non-deterministic deduplication...")
 
-        table_identifier = self._get_iceberg_table_identifier(table_path, iceberg_warehouse_path)
-        source_view = f"iceberg_merge_source_{uuid.uuid4().hex}"
+            df = df.dropDuplicates(config.merge_keys)
 
-        try:
-            target_df = self.spark.table(table_identifier)
+            self.logger.info(f"Source rows after deduplication: {df.count()}")
 
-            source_cols_map = {col.lower(): col for col in df.columns}
-            target_cols_map = {col.lower(): col for col in target_df.columns}
+        return df
 
-            missing_target_keys = [key for key in merge_keys if key.lower() not in target_cols_map]
-            if missing_target_keys:
-                raise LoaderError(
-                    f"Merge keys not found in Iceberg table: {missing_target_keys}. "
-                    f"Available columns: {target_df.columns}"
-                )
+    def _prepare_dataframe_columns(self, df: DataFrame) -> DataFrame:
+        """
+        Sanitize, normalize, and deduplicate column names to prevent write failures
+        from illegal characters or duplicate names across all load strategies.
+        """
+        df = self._rename_duplicate_columns(df)
 
-            merge_conditions = [
-                f"target.`{target_cols_map[key.lower()]}` = source.`{source_cols_map[key.lower()]}`"
-                for key in merge_keys
-            ]
+        self.logger.trace(
+            "DataFrame after handling duplicate columns",
+            extra_fields={"columns": df.columns},
+        )
 
-            target_schema: Dict[str, Any] = {
-                field.name: field.dataType for field in target_df.schema.fields
-            }
-            target_columns: List[str] = list(target_schema.keys())
-            merge_keys_lower = {key.lower() for key in merge_keys}
+        df = self._sanitize_column_names(df)
 
-            update_assignments: List[str] = []
-            insert_columns: List[str] = []
-            insert_values: List[str] = []
+        self.logger.trace(
+            "DataFrame after sanitizing column names",
+            extra_fields={"columns": df.columns},
+        )
 
-            for target_col in target_columns:
-                target_col_lower = target_col.lower()
-
-                # used in both update and insert, so add to insert columns regardless of source match
-                insert_columns.append(f"`{target_col}`")
-
-                # if a column in target is present in source (case-insensitive), we can update and insert from source; otherwise insert NULL
-                if target_col_lower in source_cols_map:
-                    source_col_exact = source_cols_map[target_col_lower]
-                    insert_values.append(f"source.`{source_col_exact}`")
-
-                    if target_col_lower not in merge_keys_lower:
-                        update_assignments.append(f"`{target_col}` = source.`{source_col_exact}`")
-                else:
-                    data_type = target_schema[target_col].simpleString()
-                    insert_values.append(f"CAST(NULL AS {data_type})")
-
-            df.createOrReplaceTempView(source_view)
-
-            merge_sql_lines = [
-                f"MERGE INTO {table_identifier} AS target",
-                f"USING {source_view} AS source",
-                f"ON {' AND '.join(merge_conditions)}",
-            ]
-
-            if update_assignments:
-                merge_sql_lines.append("WHEN MATCHED THEN UPDATE SET")
-                merge_sql_lines.append("  " + ", ".join(update_assignments))
-
-            merge_sql_lines.append(f"WHEN NOT MATCHED THEN INSERT ({', '.join(insert_columns)})")
-            merge_sql_lines.append(f"VALUES ({', '.join(insert_values)})")
-
-            merge_sql = "\n".join(merge_sql_lines)
-
-            self.logger.debug(
-                "Performing Iceberg MERGE operation",
-                extra_fields={
-                    "table_path": table_path,
-                    "table_identifier": table_identifier,
-                    "merge_keys": merge_keys,
-                    "merge_condition": " AND ".join(merge_conditions),
-                    "source_column_count": len(df.columns),
-                    "update_columns": update_assignments,
-                    "insert_columns": insert_columns,
-                },
-            )
-
-            self.spark.sql(merge_sql)
-
-            self.logger.info(
-                "Iceberg MERGE operation completed successfully",
-                extra_fields={
-                    "table_path": table_path,
-                    "table_identifier": table_identifier,
-                    "merge_keys": merge_keys,
-                },
-            )
-
-        except Exception as e:
-            error_msg = f"Failed to perform Iceberg MERGE operation: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "table_path": table_path,
-                    "table_identifier": table_identifier,
-                    "merge_keys": merge_keys,
-                },
-            )
-            raise LoaderError(error_msg) from e
-        finally:
-            if self.spark:
-                try:
-                    self.spark.catalog.dropTempView(source_view)
-                except Exception:
-                    pass
+        return df
 
     def _sanitize_column_names(self, df: DataFrame) -> DataFrame:
         """
@@ -1035,340 +585,6 @@ class ObjectStoreLoader(BaseLoader):
             )
             raise LoaderError(error_msg) from e
 
-    def _load_iceberg(
-        self,
-        df: DataFrame,
-        config: LoadingConfig,
-        *,
-        base_uri: str,
-        source_type: Optional[str] = None,
-        **kwargs,
-    ) -> str:
-        """
-        Load data as an Iceberg table with support for append, overwrite, and merge.
-
-        Iceberg tables are stored as directories managed by the configured `iceberg`
-        catalog. Append and overwrite use catalog-aware writes. Merge uses SQL
-        `MERGE INTO` against the catalog table identifier derived from the resolved
-        table path.
-
-        Args:
-            df: DataFrame to write
-            config: Loading configuration (must include merge_keys for merge mode)
-            source_type: Optional source type to prepend to the path
-            **kwargs: Additional arguments for specific formats
-
-        Returns:
-            str: Iceberg table path
-
-        Raises:
-            LoaderError: If loading fails or configuration is invalid
-        """
-        try:
-            # Handle duplicate column names by renaming them to unique names
-            df = self._rename_duplicate_columns(df)
-
-            self.logger.trace(
-                "DataFrame after handling duplicate columns",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Sanitize column names before writing table-backed formats
-            df = self._sanitize_column_names(df)
-
-            self.logger.trace(
-                "DataFrame after sanitizing column names",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Force deduplicate on merge keys if configured to avoid non-deterministic
-            # upserts when the source contains duplicate keys.
-            if config.force_nondeterministic_deduplication and config.write_mode == "merge":
-                self.logger.warning("Forcing non-deterministic deduplication...")
-
-                df = df.dropDuplicates(config.merge_keys)
-
-                self.logger.info(f"Source rows after deduplication: {df.count()}")
-
-            # Generate Iceberg table path (directory-based)
-            final_path = self._generate_table_path(
-                base_uri=base_uri, prefix=config.prefix, source_type=source_type
-            )
-
-            self.logger.trace(
-                "Writing Iceberg table",
-                extra_fields={
-                    "table_path": final_path,
-                    "write_mode": config.write_mode,
-                    "has_merge_keys": config.merge_keys is not None,
-                },
-            )
-
-            # Register the Iceberg catalog warehouse root for this write so the derived
-            # catalog table identifier resolves to the same filesystem location as final_path.
-            if self.spark:
-                self.spark.conf.set("spark.sql.catalog.iceberg.warehouse", base_uri.rstrip("/"))
-
-            if config.write_mode == "merge":
-                if config.merge_keys is None:
-                    raise LoaderError("merge_keys must be provided when write_mode is 'merge'")
-
-                # First write creates the table using append semantics. Subsequent writes
-                # use Iceberg MERGE INTO for upsert behavior.
-                if not self._table_exists(final_path, LoadingFormat.ICEBERG):
-                    self.logger.debug(
-                        "Iceberg table does not exist, creating it first",
-                        extra_fields={"table_path": final_path},
-                    )
-                    write_options = {
-                        "format": LoadingFormat.ICEBERG,
-                        "mode": "append",
-                        "mergeSchema": "true",
-                        **kwargs.get("write_options", {}),
-                    }
-                    if config.compression:
-                        write_options["compression"] = config.compression
-
-                    self._write_dataframe(
-                        df,
-                        final_path,
-                        write_options,
-                        iceberg=True,
-                        iceberg_warehouse_path=base_uri,
-                    )
-                else:
-                    self._perform_iceberg_merge(
-                        df,
-                        final_path,
-                        config.merge_keys,
-                        base_uri,
-                    )
-
-            elif config.write_mode == "append":
-                write_options = {
-                    "format": LoadingFormat.ICEBERG,
-                    "mode": "append",
-                    "mergeSchema": "true",
-                    **kwargs.get("write_options", {}),
-                }
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                self._write_dataframe(
-                    df,
-                    final_path,
-                    write_options,
-                    iceberg=True,
-                    iceberg_warehouse_path=base_uri,
-                )
-
-            else:
-                write_options = {
-                    "format": LoadingFormat.ICEBERG,
-                    "mode": config.write_mode,
-                    "mergeSchema": "true",
-                    **kwargs.get("write_options", {}),
-                }
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                self._write_dataframe(
-                    df,
-                    final_path,
-                    write_options,
-                    iceberg=True,
-                    iceberg_warehouse_path=base_uri,
-                )
-
-            self.logger.info(
-                "Successfully loaded Iceberg table",
-                extra_fields={
-                    "destination": final_path,
-                    "write_mode": config.write_mode,
-                    "merge_keys": config.merge_keys if config.write_mode == "merge" else None,
-                },
-            )
-
-            return final_path
-
-        except Exception as e:
-            error_msg = f"Failed to load Iceberg table: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "destination": config.destination,
-                    "prefix": config.prefix,
-                    "write_mode": config.write_mode,
-                },
-            )
-            raise LoaderError(error_msg) from e
-        finally:
-            # Clean up the warehouse path from Spark configuration to avoid side effects on other operations
-            if self.spark:
-                try:
-                    self.spark.conf.unset("spark.sql.catalog.iceberg.warehouse")
-                except Exception as e:
-                    self.logger.trace(
-                        "Failed to unset Iceberg warehouse configuration after write",
-                        extra_fields={"error": str(e), "warehouse": base_uri.rstrip("/")},
-                    )
-
-    def _load_delta(
-        self,
-        df: DataFrame,
-        config: LoadingConfig,
-        *,
-        base_uri: str,
-        source_type: Optional[str] = None,
-        **kwargs,
-    ) -> str:
-        """
-        Load data as Delta table with support for multiple save modes.
-
-        Delta tables are stored as directories, not single files. Supports three save modes:
-        - **overwrite** (default): Replace all existing data in the table
-        - **append**: Add new data without removing existing data
-        - **merge**: Upsert on merge_keys; updates only columns present in both source
-          and target, inserts fill missing target-only columns with typed NULL (see
-          _perform_delta_merge). Append/overwrite still use mergeSchema for new source columns.
-
-        Args:
-            df: DataFrame to write
-            config: Loading configuration (must include merge_keys for merge mode)
-            source_type: Optional source type to prepend to the path
-            **kwargs: Additional arguments for specific formats
-
-        Returns:
-            str: Delta table path
-
-        Raises:
-            LoaderError: If loading fails or configuration is invalid
-        """
-        try:
-            # Handle duplicate column names by renaming them to unique names
-            df = self._rename_duplicate_columns(df)
-
-            self.logger.trace(
-                "DataFrame after handling duplicate columns",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Sanitize column names to handle illegal characters for Delta Lake
-            df = self._sanitize_column_names(df)
-
-            self.logger.trace(
-                "DataFrame after sanitizing column names",
-                extra_fields={"columns": df.columns},
-            )
-
-            # Force deduplicate on merge keys if configured, to avoid non-deterministic merge failures due to duplicate keys in source data. This is a temporary workaround until we implement proper merge logic for Delta that can handle duplicates without failure.
-            if config.force_nondeterministic_deduplication and config.write_mode == "merge":
-                self.logger.warning("Forcing non-deterministic deduplication...")
-
-                df = df.dropDuplicates(config.merge_keys)
-
-                self.logger.info(f"Source rows after deduplication: {df.count()}")
-
-            # Generate table path (directory-based)
-            # Source type prefix is automatically prepended
-            final_path = self._generate_table_path(
-                base_uri=base_uri, prefix=config.prefix, source_type=source_type
-            )
-
-            self.logger.trace(
-                "Writing Delta table",
-                extra_fields={
-                    "delta_path": final_path,
-                    "write_mode": config.write_mode,
-                    "has_merge_keys": config.merge_keys is not None,
-                },
-            )
-
-            # Handle different write modes
-            if config.write_mode == "merge":
-                # Merge mode: Use Delta Lake MERGE operation for upsert
-                # Check if table exists - if not, create it first using append mode
-                if not self._table_exists(final_path, LoadingFormat.DELTA):
-                    self.logger.debug(
-                        "Delta table does not exist, creating it first",
-                        extra_fields={"delta_path": final_path},
-                    )
-                    # Create table using append mode (first write)
-                    # This ensures schema evolution is enabled
-                    write_options = {
-                        "format": LoadingFormat.DELTA,
-                        "mode": "append",
-                        "mergeSchema": "true",  # Enable schema evolution
-                    }
-                    if config.compression:
-                        write_options["compression"] = config.compression
-                    self._write_dataframe(df, final_path, write_options)
-                else:
-                    # Perform merge operation
-                    if config.merge_keys is None:
-                        raise LoaderError("merge_keys must be provided when write_mode is 'merge'")
-
-                    self._perform_delta_merge(df, final_path, config.merge_keys, config)
-
-            elif config.write_mode == "append":
-                # Append mode: Add new data without removing existing data
-                # Schema evolution is enabled to allow new columns
-                write_options = {
-                    "format": LoadingFormat.DELTA,
-                    "mode": "append",
-                    "mergeSchema": "true",  # Enable schema evolution
-                    **kwargs.get("write_options", {}),
-                }
-                # Compression is handled differently for Delta
-                # Delta uses Parquet files internally, so compression can be set
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                # Write directly to final location (Delta manages its own files)
-                self._write_dataframe(df, final_path, write_options)
-
-            else:
-                # Overwrite mode (default) or other modes: Use standard write
-                # Schema evolution is enabled to allow new columns
-                write_options = {
-                    "format": LoadingFormat.DELTA,
-                    "mode": config.write_mode,
-                    "mergeSchema": "true",  # Enable schema evolution
-                    **kwargs.get("write_options", {}),
-                }
-                # Compression is handled differently for Delta
-                # Delta uses Parquet files internally, so compression can be set
-                if config.compression:
-                    write_options["compression"] = config.compression
-
-                # Write directly to final location (Delta manages its own files)
-                self._write_dataframe(df, final_path, write_options)
-
-            self.logger.info(
-                "Successfully loaded Delta table",
-                extra_fields={
-                    "destination": final_path,
-                    "write_mode": config.write_mode,
-                    "merge_keys": config.merge_keys if config.write_mode == "merge" else None,
-                },
-            )
-
-            return final_path
-
-        except Exception as e:
-            error_msg = f"Failed to load Delta table: {e!s}"
-            self.logger.error(
-                error_msg,
-                extra_fields={
-                    "error": str(e),
-                    "destination": config.destination,
-                    "prefix": config.prefix,
-                    "write_mode": config.write_mode,
-                },
-            )
-            raise LoaderError(error_msg) from e
-
     def _load_file_based(
         self,
         df: DataFrame,
@@ -1394,7 +610,7 @@ class ObjectStoreLoader(BaseLoader):
         temp_path = None
         try:
             # Prepend source type prefix to the prefix
-            prefixed_prefix = self._prepend_source_type_prefix(config.prefix or "data", source_type)
+            prefixed_prefix = prepend_source_type_prefix(config.prefix or "data", source_type)
 
             # Generate paths for file-based format
             final_path, key = self._generate_final_path(

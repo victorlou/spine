@@ -7,8 +7,9 @@ import pytest
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.loader.object_store import SparkFilesystemObjectStore, loading_base_uri
-from src.loader.object_store_loader import ObjectStoreLoader, retry_on_transient_storage_error
+from src.loader.object_store_loader import retry_on_transient_storage_error
 from src.utils.exceptions import LoaderError
+from src.utils.path_prefix import prepend_source_type_prefix
 
 
 def test_loading_base_uri_s3() -> None:
@@ -16,7 +17,7 @@ def test_loading_base_uri_s3() -> None:
         destination="s3",
         s3_bucket="my-bucket",
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     assert loading_base_uri(cfg) == "s3a://my-bucket"
 
@@ -27,7 +28,7 @@ def test_loading_base_uri_s3_identity_from_validated_config() -> None:
         destination="s3",
         s3_bucket="  my-bucket  ",
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     assert loading_base_uri(cfg) == "s3a://my-bucket"
 
@@ -57,7 +58,7 @@ def test_loading_base_uri_local(tmp_path: Path) -> None:
         destination="local",
         storage_root=str(root),
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     uri = loading_base_uri(cfg)
     assert uri == root.resolve().as_uri().rstrip("/")
@@ -80,7 +81,7 @@ def test_loading_base_uri_gcs() -> None:
         destination="gcs",
         gcs_bucket="my-gcs-bucket",
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     assert loading_base_uri(cfg) == "gs://my-gcs-bucket"
 
@@ -105,7 +106,7 @@ def test_loading_base_uri_azure() -> None:
         azure_container="mycontainer",
         azure_account="myaccount",
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     uri = loading_base_uri(cfg)
     assert uri == "abfs://mycontainer@myaccount.dfs.core.windows.net"
@@ -117,7 +118,7 @@ def test_loading_base_uri_blob_destination_alias() -> None:
         bucket="mycontainer",
         azure_account="myaccount",
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     assert cfg.destination == "azure_blob"
     uri = loading_base_uri(cfg)
@@ -130,7 +131,7 @@ def test_loading_base_uri_azure_destination_alias() -> None:
         bucket="mycontainer",
         azure_account="myaccount",
         prefix="a/b",
-        format="delta",
+        format=LoadingFormat.DELTA,
     )
     assert cfg.destination == "azure_blob"
     uri = loading_base_uri(cfg)
@@ -267,24 +268,19 @@ def test_is_empty_directory(loader_spark: MagicMock) -> None:
     assert store.is_empty_directory("s3a://b/missing") is True
 
 
-def test_object_store_loader_generate_table_path_uses_object_store() -> None:
-    loader = ObjectStoreLoader()
-    loader.spark = MagicMock(name="spark")
-    loader._object_store = MagicMock(name="object_store")
-    loader._object_store.resolve_path.return_value = "s3a://bucket/rest_api/foo/"
+def test_source_type_prefix_can_be_resolved_by_object_store() -> None:
+    store = SparkFilesystemObjectStore(MagicMock(name="spark"))
+    prefixed = prepend_source_type_prefix("foo/bar", source_type="rest_api")
 
-    path = loader._generate_table_path("s3a://bucket", "foo", source_type="rest_api")
+    path = store.resolve_path("s3a://bucket", prefixed, trailing_slash=True)
 
-    assert path == "s3a://bucket/rest_api/foo/"
-    loader._object_store.resolve_path.assert_called_once_with(
-        "s3a://bucket", "rest_api/foo", trailing_slash=True
-    )
+    assert path == "s3a://bucket/rest_api/foo/bar/"
 
 
 def test_retry_on_transient_storage_error_retries_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("src.loader.object_store_loader.time.sleep", lambda _: None)
+    monkeypatch.setattr("src.utils.transient_storage_retry.time.sleep", lambda _: None)
     attempts = {"count": 0}
 
     @retry_on_transient_storage_error(max_retries=3, delay=0)

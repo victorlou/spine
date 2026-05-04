@@ -165,3 +165,65 @@ def test_runtime_readiness_notes_include_s3_when_present() -> None:
     )
     assert "s3_auth=default_chain" in summary
     assert "Spark destinations=" in summary
+    assert "spark_ui_enabled=False" in summary
+    assert "spark_event_log=off" in summary
+
+
+def test_managed_configs_spark_ui_forces_loopback_driver_when_no_managed_platform() -> None:
+    """LAN IP from SPARK_LOCAL_IP breaks SparkUI bind; loopback is safe for local_dev + S3 chain."""
+    resolved = resolve_spark_runtime(SparkRuntimeConfig(spark_ui_enabled=True))
+    cfg = SparkSessionConf.get_configs_for_destinations(
+        destinations={"s3"},
+        use_explicit_credentials=False,
+        aws_region="us-east-1",
+        resolved=resolved,
+    )
+    assert cfg["spark.ui.enabled"] == "true"
+    assert cfg["spark.driver.host"] == "127.0.0.1"
+    assert cfg["spark.driver.bindAddress"] == "127.0.0.1"
+
+
+def test_managed_configs_spark_ui_enabled_sets_true_and_port() -> None:
+    resolved = resolve_spark_runtime(
+        SparkRuntimeConfig(
+            spark_ui_enabled=True, spark_ui_port=4050, spark_ui_show_console_progress=True
+        )
+    )
+    cfg = SparkSessionConf.get_configs_for_destinations(
+        destinations={"local"},
+        use_explicit_credentials=False,
+        resolved=resolved,
+    )
+    assert cfg["spark.ui.enabled"] == "true"
+    assert cfg["spark.ui.port"] == "4050"
+    assert cfg["spark.ui.showConsoleProgress"] == "true"
+
+
+def test_managed_configs_spark_event_log_sets_dir_and_compress() -> None:
+    log_dir = "/tmp/spine_spark_event_logs_test"
+    resolved = resolve_spark_runtime(
+        SparkRuntimeConfig(
+            spark_event_log_enabled=True,
+            spark_event_log_dir=log_dir,
+            spark_event_log_compress=False,
+        )
+    )
+    cfg = SparkSessionConf.get_configs_for_destinations(
+        destinations={"local"},
+        use_explicit_credentials=False,
+        resolved=resolved,
+    )
+    assert cfg["spark.eventLog.enabled"] == "true"
+    assert cfg["spark.eventLog.dir"].startswith("file:")
+    assert "spine_spark_event_logs_test" in cfg["spark.eventLog.dir"]
+    assert cfg["spark.eventLog.compress"] == "false"
+
+
+def test_get_java_options_show_console_progress_follows_runtime() -> None:
+    resolved = resolve_spark_runtime(SparkRuntimeConfig(spark_ui_show_console_progress=True))
+    SparkSessionConf.get_java_options(destinations={"local"}, resolved=resolved)
+    assert "spark.ui.showConsoleProgress=true" in os.environ["PYSPARK_SUBMIT_ARGS"]
+    SparkSessionConf.get_java_options(
+        destinations={"local"}, resolved=resolve_spark_runtime(SparkRuntimeConfig())
+    )
+    assert "spark.ui.showConsoleProgress=false" in os.environ["PYSPARK_SUBMIT_ARGS"]

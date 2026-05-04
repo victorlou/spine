@@ -114,7 +114,9 @@ def _embedded_driver_overlays(resolved: ResolvedSparkRuntime) -> Dict[str, Any]:
         ManagedSparkPlatform.EMR,
     ):
         return {}
-    overlays: Dict[str, Any] = {"spark.ui.enabled": "false"}
+    overlays: Dict[str, Any] = {}
+    if not resolved.spark_ui_enabled:
+        overlays["spark.ui.enabled"] = "false"
     if resolved.managed_platform in (
         ManagedSparkPlatform.KUBERNETES,
         ManagedSparkPlatform.ECS,
@@ -130,6 +132,29 @@ def _embedded_driver_overlays(resolved: ResolvedSparkRuntime) -> Dict[str, Any]:
     overlays["spark.driver.bindAddress"] = bind
     overlays["spark.driver.host"] = host
     return overlays
+
+
+def _merge_observability_configs(config: Dict[str, Any], resolved: ResolvedSparkRuntime) -> None:
+    """Apply Spark UI, console progress, and optional event logging from resolved runtime."""
+    config["spark.ui.showConsoleProgress"] = (
+        "true" if resolved.spark_ui_show_console_progress else "false"
+    )
+    if resolved.spark_ui_enabled:
+        config["spark.ui.enabled"] = "true"
+        if resolved.spark_ui_port is not None:
+            config["spark.ui.port"] = str(resolved.spark_ui_port)
+        if resolved.managed_platform == ManagedSparkPlatform.NONE:
+            # ``_embedded_driver_overlays`` may set host/bind from ``SPARK_LOCAL_IP`` (LAN IP). Jetty
+            # then tries to bind SparkUI on that interface; ports are often busy or blocked off-VPN.
+            # For laptop / single-process ``local_dev`` with S3 default chain, loopback is reliable.
+            config["spark.driver.bindAddress"] = "127.0.0.1"
+            config["spark.driver.host"] = "127.0.0.1"
+    else:
+        config["spark.ui.enabled"] = "false"
+    if resolved.spark_event_log_enabled and resolved.spark_event_log_dir_uri:
+        config["spark.eventLog.enabled"] = "true"
+        config["spark.eventLog.dir"] = resolved.spark_event_log_dir_uri
+        config["spark.eventLog.compress"] = "true" if resolved.spark_event_log_compress else "false"
 
 
 def _s3a_endpoint_and_filesystem(s3_region: str) -> Dict[str, str]:
@@ -158,9 +183,10 @@ class SparkSessionConf:
         destinations = destinations or {"local"}
         eff = _effective_resolved(resolved)
         spark_packages = SparkSessionConf._resolve_spark_packages(destinations, eff)
+        show_progress = "true" if eff.spark_ui_show_console_progress else "false"
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
             f"--packages {','.join(spark_packages)} "
-            "--conf spark.ui.showConsoleProgress=false "
+            f"--conf spark.ui.showConsoleProgress={show_progress} "
             "pyspark-shell"
         )
 
@@ -222,7 +248,6 @@ class SparkSessionConf:
             "spark.master": "local[*]",
             "spark.driver.bindAddress": "127.0.0.1",
             "spark.driver.host": "127.0.0.1",
-            "spark.ui.enabled": "false",
             **SparkSessionConf._base_configs(),
             "spark.jars.packages": ",".join(
                 SparkSessionConf._resolve_spark_packages(destinations, eff)
@@ -239,6 +264,7 @@ class SparkSessionConf:
 
         config.update(_hadoop_filesystem_impl_layer(destinations))
         _merge_gcs_shaded_jar_into_config(config, destinations, eff)
+        _merge_observability_configs(config, eff)
         return config
 
     @staticmethod
@@ -274,6 +300,11 @@ class SparkSessionConf:
         if "azure_blob" in destinations:
             parts.append(f"azure_mode={eff.azure_connector_mode}")
         parts.append(f"managed_platform={eff.managed_platform.value}")
+        parts.append(f"spark_ui_enabled={eff.spark_ui_enabled}")
+        if eff.spark_event_log_enabled:
+            parts.append("spark_event_log=on")
+        else:
+            parts.append("spark_event_log=off")
         return "; ".join(parts)
 
     @staticmethod
@@ -323,4 +354,5 @@ class SparkSessionConf:
             config.update(_s3a_endpoint_and_filesystem(s3_region))
         config.update(_hadoop_filesystem_impl_layer(destinations))
         _merge_gcs_shaded_jar_into_config(config, destinations, resolved)
+        _merge_observability_configs(config, resolved)
         return config

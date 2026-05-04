@@ -90,6 +90,13 @@ defaults:
   #   s3_connector_mode: "auto"
   #   gcs_connector_mode: "auto"
   #   azure_connector_mode: "auto"
+  # Optional observability (defaults off; see docs/configuration/loading.md):
+  #   spark_ui_enabled: false
+  #   spark_ui_port: null          # omit for Spark default 4040
+  #   spark_ui_show_console_progress: false
+  #   spark_event_log_enabled: false
+  #   spark_event_log_dir: null    # required when spark_event_log_enabled is true
+  #   spark_event_log_compress: true
   # GCS auth defaults to APPLICATION_DEFAULT (ADC/service-account/workload identity).
   # Set SPINE_GCS_AUTH_TYPE=COMPUTE_ENGINE only when you intentionally require metadata auth.
 

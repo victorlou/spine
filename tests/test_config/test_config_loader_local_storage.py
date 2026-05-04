@@ -129,3 +129,34 @@ def test_resolve_local_loading_skips_when_resources_not_mapping(tmp_path: Path) 
     }
     loader._resolve_local_loading_storage_paths(cfg, layout_root=tmp_path)
     assert cfg["sources"]["api"]["resources"] == ["not", "a", "dict"]
+
+
+def test_resolve_spark_runtime_event_log_dir_relative_to_repo_root(tmp_path: Path) -> None:
+    loader = ConfigLoader()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg = {
+        "defaults": {
+            "spark_runtime": {
+                "spark_event_log_enabled": True,
+                "spark_event_log_dir": ".spine/spark-events",
+            }
+        }
+    }
+    loader._resolve_spark_runtime_event_log_dir(cfg, layout_root=repo.resolve())
+    assert cfg["defaults"]["spark_runtime"]["spark_event_log_dir"] == str(
+        (repo / ".spine/spark-events").resolve()
+    )
+
+
+def test_resolve_spark_runtime_event_log_dir_absolute_unchanged(tmp_path: Path) -> None:
+    loader = ConfigLoader()
+    cfg = {
+        "defaults": {
+            "spark_runtime": {
+                "spark_event_log_dir": "/var/log/spark-events",
+            }
+        }
+    }
+    loader._resolve_spark_runtime_event_log_dir(cfg, layout_root=tmp_path)
+    assert cfg["defaults"]["spark_runtime"]["spark_event_log_dir"] == "/var/log/spark-events"

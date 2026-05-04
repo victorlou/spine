@@ -1497,6 +1497,45 @@ class SparkRuntimeConfig(BaseModel):
         default=ConnectorProvisionMode.AUTO,
         description="ABFS connector: same semantics as ``gcs_connector_mode``.",
     )
+    spark_ui_enabled: bool = Field(
+        default=False,
+        description="When true, enable Spark Web UI (for example http://127.0.0.1:4040) while the session runs.",
+    )
+    spark_ui_port: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Optional Spark UI port; omit to use Spark default (4040).",
+    )
+    spark_ui_show_console_progress: bool = Field(
+        default=False,
+        description="When true, set spark.ui.showConsoleProgress so the driver prints stage progress.",
+    )
+    spark_event_log_enabled: bool = Field(
+        default=False,
+        description="When true, write Spark event logs for History Server replay; requires spark_event_log_dir.",
+    )
+    spark_event_log_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Directory or URI for event logs (required when spark_event_log_enabled is true). "
+            "Relative paths resolve under the repository root at load time. Use durable storage on clusters."
+        ),
+    )
+    spark_event_log_compress: bool = Field(
+        default=True,
+        description="When true, compress event log files (spark.eventLog.compress).",
+    )
+
+    @model_validator(mode="after")
+    def spark_event_log_dir_required_when_enabled(self) -> "SparkRuntimeConfig":
+        if self.spark_event_log_enabled:
+            d = (self.spark_event_log_dir or "").strip()
+            if not d:
+                raise ValueError(
+                    "spark_event_log_dir is required when spark_event_log_enabled is true"
+                )
+        return self
 
 
 class DefaultsConfig(BaseModel):

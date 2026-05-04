@@ -27,6 +27,7 @@ from src.config.config_models import (
     SnapshotConfig,
     SourceConfig,
     SourceType,
+    SparkRuntimeConfig,
     StreamingConfig,
     TableReadOptions,
     is_database_source_type,
@@ -964,3 +965,14 @@ def test_source_config_snapshot_on_non_rest_api_raises() -> None:
                 )
             },
         )
+
+
+def test_spark_runtime_event_log_requires_dir() -> None:
+    with pytest.raises(ValidationError, match="spark_event_log_dir"):
+        SparkRuntimeConfig(spark_event_log_enabled=True)
+
+
+def test_spark_runtime_event_log_accepts_dir() -> None:
+    c = SparkRuntimeConfig(spark_event_log_enabled=True, spark_event_log_dir="/tmp/spark-events")
+    assert c.spark_event_log_enabled is True
+    assert c.spark_event_log_dir == "/tmp/spark-events"

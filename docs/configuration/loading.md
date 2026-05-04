@@ -21,6 +21,7 @@
   - [Current Iceberg limitations](#current-iceberg-limitations)
 - [Quick reference](#quick-reference)
 - [Spark Runtime Readiness](#spark-runtime-readiness)
+  - [Spark UI and event logs](#spark-ui-and-event-logs-defaultsspark_runtime)
 
 ## Destinations
 
@@ -249,6 +250,21 @@ Spine composes Spark connector packages and Hadoop filesystem settings from the 
 | `azure_blob` (`blob`/`azure`) | `azure_container` (or `bucket` alias), `azure_account`, `prefix` | ABFS connector + `fs.abfs.*` implementation | runtime-provided Azure storage auth |
 
 **Configuration-first:** set `defaults.spark_runtime.profile` (`auto`, `local_dev`, or `cluster_managed`) and `s3_connector_mode` / `gcs_connector_mode` / `azure_connector_mode` (`auto`, `packages`, or `external`). With `auto`, Spine inspects the process environment: on Databricks and EMR, all three default to `external` (connectors expected on the cluster); elsewhere they default to `packages` (Ivy for Delta/S3/Azure connectors; GCS uses the shaded connector JAR on `spark.jars`). S3A endpoint **region** is not part of `spark_runtime`; it follows the AWS credential chain and standard AWS environment variables.
+
+### Spark UI and event logs (`defaults.spark_runtime`)
+
+All of the following default to **off** so CI and unattended runs stay quiet.
+
+| YAML field | Spark keys | Notes |
+|------------|------------|--------|
+| `spark_ui_enabled` | `spark.ui.enabled` | When `true`, the Spark Web UI is available for the lifetime of the session (for example `http://127.0.0.1:4040` for local driver-hosted Spark). On **no** managed platform (laptop / default IAM + S3), Spine sets **`spark.driver.host`** / **`spark.driver.bindAddress`** to **`127.0.0.1`** and **temporarily removes `SPARK_LOCAL_IP`** from the process environment around **`SparkSession.getOrCreate()`**, because the JVM still reads that variable for UI bind addresses even when SparkConf lists loopback. |
+| `spark_ui_port` | `spark.ui.port` | Optional; omit to use Spark default (4040). |
+| `spark_ui_show_console_progress` | `spark.ui.showConsoleProgress` | When `true`, prints stage progress in the driver console and aligns `PYSPARK_SUBMIT_ARGS`. |
+| `spark_event_log_enabled` | `spark.eventLog.enabled` | When `true`, requires `spark_event_log_dir`. Writes Spark event logs for **Spark History Server** replay; Spine does not start History Server. |
+| `spark_event_log_dir` | `spark.eventLog.dir` | Filesystem path or URI (`file:`, `s3a:`, …). Relative paths resolve under the **repository root** (same anchor as `storage_root` for local loading). |
+| `spark_event_log_compress` | `spark.eventLog.compress` | Default `true` to limit log size. |
+
+**Practical guidance:** use **`spark_ui_enabled: true`** for interactive profiling of large JDBC or merge jobs. Use **event logging** when you will point **Spark History Server** at `spark_event_log_dir` (or your platform’s equivalent) or copy logs to durable analysis storage. On **Databricks / EMR**, prefer the platform Spark UI; avoid writing event logs only to ephemeral driver-local disk unless you understand retention.
 
 **Optional environment overrides** (same semantics as YAML when set): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (defaults to the official shaded `gcs-connector` JAR on Maven Central when mode is `packages`), `SPARK_AZURE_CONNECTOR_MODE`, `SPINE_GCS_AUTH_TYPE` (defaults to `APPLICATION_DEFAULT`; set `COMPUTE_ENGINE` only when you intentionally rely on GCE metadata). Use these when CI or a container image cannot carry pipeline YAML changes.
 

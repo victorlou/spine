@@ -6,16 +6,55 @@ Uses :class:`src.config.config_spark.SparkSessionConf` for builder settings and
 """
 
 import atexit
-from typing import Optional, Set
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Set
+from urllib.parse import urlparse
 
 from pyspark.sql import SparkSession
 
 from src.config.config_spark import SparkSessionConf
 from src.config.settings import get_settings
-from src.config.spark_runtime import ResolvedSparkRuntime, resolve_spark_runtime
+from src.config.spark_runtime import (
+    ManagedSparkPlatform,
+    ResolvedSparkRuntime,
+    resolve_spark_runtime,
+)
 from src.utils.aws_credentials import AWSCredentialManager
 from src.utils.exceptions import AWSError, SparkError
 from src.utils.logger import get_logger
+
+
+def _ensure_local_spark_event_log_dir(configs: Dict[str, Any], logger: Any) -> None:
+    """
+    Spark's event log writer requires the base directory to exist for ``file:`` URIs.
+
+    Object-store URIs (``s3a:``, etc.) are skipped; operators must ensure those exist.
+    """
+    if str(configs.get("spark.eventLog.enabled", "")).lower() != "true":
+        return
+    raw = configs.get("spark.eventLog.dir")
+    if not raw or not isinstance(raw, str):
+        return
+    uri = raw.strip()
+    if not uri.lower().startswith("file:"):
+        return
+    parsed = urlparse(uri)
+    path = Path(parsed.path)
+    if not path.parts:
+        return
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise SparkError(
+            message=f"Cannot create Spark event log directory {path}: {e!s}",
+            operation="init_session",
+            original_error=e,
+        ) from e
+    logger.trace(
+        "Ensured Spark event log directory exists",
+        extra_fields={"path": str(path)},
+    )
 
 
 class SparkManager:
@@ -131,11 +170,33 @@ class SparkManager:
                     resolved=resolved,
                 )
 
+                _ensure_local_spark_event_log_dir(configs, self._logger)
+
                 builder = SparkSession.builder
                 for key, value in configs.items():
                     builder = builder.config(key, value)
 
-                self._spark = builder.getOrCreate()
+                # Spark's JVM reads ``SPARK_LOCAL_IP`` when picking addresses; it can override
+                # ``spark.driver.host``/``bindAddress`` for SparkUI and bind Jetty on a LAN IP that
+                # fails (VPN / firewall). Clear it briefly for local UI + unmanaged host only.
+                _saved_spark_local_ip: Optional[str] = None
+                _clear_local_ip_for_ui = (
+                    resolved.spark_ui_enabled
+                    and resolved.managed_platform == ManagedSparkPlatform.NONE
+                )
+                if _clear_local_ip_for_ui:
+                    _saved_spark_local_ip = os.environ.pop("SPARK_LOCAL_IP", None)
+                    self._logger.trace(
+                        "Temporarily unset SPARK_LOCAL_IP for Spark session bootstrap",
+                        extra_fields={
+                            "had_spark_local_ip": _saved_spark_local_ip is not None,
+                        },
+                    )
+                try:
+                    self._spark = builder.getOrCreate()
+                finally:
+                    if _clear_local_ip_for_ui and _saved_spark_local_ip is not None:
+                        os.environ["SPARK_LOCAL_IP"] = _saved_spark_local_ip
 
                 atexit.register(self.stop_session)
 

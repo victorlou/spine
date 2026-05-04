@@ -734,7 +734,7 @@ def test_resolve_resource_header_values_dataframe_branch(
     sentinel = MagicMock(name="fake_df")
     sentinel.columns = ["tok"]
     post_null = MagicMock()
-    post_null.select.return_value.collect.return_value = [{"tok": "from-df"}]
+    post_null.select.return_value.limit.return_value.collect.return_value = [{"tok": "from-df"}]
     sentinel.filter.return_value = post_null
 
     real_isinstance = builtins.isinstance
@@ -793,7 +793,7 @@ def test_resolve_resource_header_values_dataframe_empty_after_null_filter_raises
     sentinel = MagicMock(name="fake_df")
     sentinel.columns = ["tok"]
     post_null = MagicMock()
-    post_null.select.return_value.collect.return_value = []
+    post_null.select.return_value.limit.return_value.collect.return_value = []
     sentinel.filter.return_value = post_null
 
     real_isinstance = builtins.isinstance
@@ -832,7 +832,9 @@ def test_resolve_resource_header_values_applies_filter_before_extracting_from_da
     filtered = MagicMock(name="after_parameter_filter")
     filtered.columns = ["tok"]
     post_null = MagicMock()
-    post_null.select.return_value.collect.return_value = [{"tok": "filtered-val"}]
+    post_null.select.return_value.limit.return_value.collect.return_value = [
+        {"tok": "filtered-val"}
+    ]
     filtered.filter.return_value = post_null
 
     real_isinstance = builtins.isinstance

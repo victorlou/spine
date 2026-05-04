@@ -66,6 +66,10 @@ from src.utils.snapshot_poller import (
     SnapshotTimeoutError,
 )
 
+# Maximum number of distinct values collected from a SOURCE parameter field for request fan-out.
+# Exceeding this limit would cause an unbounded number of API requests and OOM the driver.
+_MAX_SOURCE_DISTINCT_VALUES = 10_000
+
 
 def _sigterm_handler(signum: int, frame: Any) -> None:
     """Raise GracefulShutdownError so handle()'s finally block runs and audit is flushed."""
@@ -317,7 +321,7 @@ class DynamicHandler(BaseHandler):
                                 f"Available columns: {source_data.columns}"
                             )
                         df_filtered = source_data.filter(col(field).isNotNull())
-                        values = df_filtered.select(field).collect()
+                        values = df_filtered.select(field).limit(1).collect()
                         if values:
                             # Use only the first value for header (headers must be single-valued)
                             resolved_headers[header_name] = str(values[0][field])
@@ -752,7 +756,13 @@ class DynamicHandler(BaseHandler):
             )
 
         df = df.filter(col(field).isNotNull())
-        values = df.select(field).distinct().collect()
+        values = df.select(field).distinct().limit(_MAX_SOURCE_DISTINCT_VALUES + 1).collect()
+        if len(values) > _MAX_SOURCE_DISTINCT_VALUES:
+            raise HandlerError(
+                f"SOURCE field '{field}' has more than {_MAX_SOURCE_DISTINCT_VALUES} distinct "
+                "values. This would generate too many requests. Add a filter or reduce cardinality.",
+                details={"field": field, "max_allowed": _MAX_SOURCE_DISTINCT_VALUES},
+            )
         return [row[field] for row in values]
 
     def _apply_parameter_filter(

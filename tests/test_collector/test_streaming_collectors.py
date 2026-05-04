@@ -45,7 +45,7 @@ def test_streaming_collector_flushes_at_threshold(streaming_deps: dict, monkeypa
         execution_plan=streaming_deps["execution_plan"],
     )
     df_mock = MagicMock()
-    df_mock.count.return_value = 1
+    df_mock.rdd.isEmpty.return_value = False
     c._parse_batches = MagicMock(return_value=df_mock)  # type: ignore[method-assign]
 
     batch = RawDataBatch(raw_data=[], request_context=None)
@@ -132,7 +132,7 @@ def test_streaming_flush_with_empty_dataframe_does_not_store(streaming_deps: dic
     )
     c.batches = [RawDataBatch(raw_data=[{"x": 1}], request_context=None)]
     empty_df = MagicMock()
-    empty_df.count.return_value = 0
+    empty_df.rdd.isEmpty.return_value = True
     c._parse_batches = MagicMock(return_value=empty_df)  # type: ignore[method-assign]
 
     c._flush_to_redis()
@@ -316,11 +316,10 @@ def test_streaming_second_flush_merges_via_union_by_name(streaming_deps: dict) -
         execution_plan=streaming_deps["execution_plan"],
     )
     df1 = MagicMock()
-    df1.count.return_value = 1
+    df1.rdd.isEmpty.return_value = False
     df2 = MagicMock()
-    df2.count.return_value = 1
+    df2.rdd.isEmpty.return_value = False
     merged = MagicMock()
-    merged.count.return_value = 2
     df1.unionByName.return_value = merged
     c._parse_batches = MagicMock(side_effect=[df1, df2])  # type: ignore[method-assign]
 

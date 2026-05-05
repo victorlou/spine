@@ -84,6 +84,8 @@ Optional **`table_read_options`** describes **Spark `DataFrameReader.jdbc`** opt
 - **Range partitioning** (mutually exclusive with `predicates`): **`partition_column`**, **`lower_bound`**, **`upper_bound`**, **`num_partitions`**. This splits the read into **multiple JDBC queries** (one per partition range), so Spark can run **parallel tasks** across executors. Bounds are **operator-supplied** (Spine does not infer min/max). The column must suit Spark’s JDBC partitioner (typically an integer key). Without range mode or predicates, the extract uses a **single** JDBC partition regardless of `fetch_size`; write parallelism later follows that upstream partition count unless you set **`loading.output_partitions`** (see [Loading](loading.md)).
 - **`predicates`**: non-empty list of `WHERE` fragments for predicate-based JDBC reads (parallel tasks per predicate). Do not combine with range mode fields.
 
+At extract time the pipeline logs **`JDBC extract plan`** (read mode, predicate or range parameters, optional **`fetch_size`**) and **`spark_partitions`** from the lazy Spark plan so you can confirm the JDBC call shape without opening the Spark UI. **`take(1)`** for non-empty checks uses only one task and does not validate parallel reads; bulk write parallelism follows upstream partitions unless **`loading.output_partitions`** coalesces downward—see [Loading — Writer partitioning](loading.md#writer-partitioning-output_partitions).
+
 Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block once they use the same Spark read path. See commented examples in [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml).
 
 ### Default loading

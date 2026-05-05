@@ -49,10 +49,9 @@ class BaseLoadStrategy(ABC):
             Fully resolved table directory URI.
         """
         full_prefix = prepend_source_type_prefix(self.config.prefix, self.source_type)
-        clean_prefix = full_prefix.strip("/") if full_prefix else ""
 
-        if clean_prefix:
-            return self.object_store.resolve_path(self.base_uri, clean_prefix, trailing_slash=True)
+        if full_prefix:
+            return self.object_store.resolve_path(self.base_uri, full_prefix, trailing_slash=True)
         return self.object_store.resolve_path(self.base_uri, trailing_slash=True)
 
     def _optimize_dataframe(self, df: DataFrame) -> DataFrame:
@@ -67,6 +66,43 @@ class BaseLoadStrategy(ABC):
         if self.config.output_partitions is not None:
             return df.coalesce(self.config.output_partitions)
         return df
+
+    def _optimize_dataframe_for_write(self, df: DataFrame) -> DataFrame:
+        """
+        Apply ``_optimize_dataframe`` and log Spark partition counts.
+
+        ``coalesce`` cannot increase partition count; warn when ``output_partitions``
+        is larger than the current partition count so operators do not assume extra
+        write parallelism was created.
+        """
+        partitions_in = df.rdd.getNumPartitions()
+        optimized_df = self._optimize_dataframe(df)
+        partitions_out = optimized_df.rdd.getNumPartitions()
+        self.logger.debug(
+            "Table write partition layout",
+            extra_fields={
+                "partitions_before_optimize": partitions_in,
+                "output_partitions": self.config.output_partitions,
+                "partitions_after_optimize": partitions_out,
+                "destination": self.config.destination,
+                "prefix": self.config.prefix,
+            },
+        )
+        if (
+            self.config.output_partitions is not None
+            and self.config.output_partitions > partitions_in
+        ):
+            self.logger.warning(
+                "output_partitions exceeds current DataFrame partition count; coalesce cannot "
+                "increase partitions. Use parallel JDBC (table_read_options) or repartition "
+                "(shuffle) if more write tasks are required.",
+                extra_fields={
+                    "output_partitions": self.config.output_partitions,
+                    "partitions_before_optimize": partitions_in,
+                    "partitions_after_optimize": partitions_out,
+                },
+            )
+        return optimized_df
 
     def _prepare_writer(
         self,
@@ -94,7 +130,7 @@ class BaseLoadStrategy(ABC):
         format_type = options_copy.pop("format", "parquet")
         write_mode = options_copy.pop("mode", "overwrite")
 
-        optimized_df = self._optimize_dataframe(df)
+        optimized_df = self._optimize_dataframe_for_write(df)
         writer = optimized_df.write.format(format_type).mode(write_mode)
 
         if options_copy:

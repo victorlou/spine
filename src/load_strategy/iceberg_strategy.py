@@ -112,7 +112,13 @@ class IcebergStrategy(BaseLoadStrategy):
         self._set_warehouse_conf()
         try:
             writer = self._prepare_writer(df, write_options)
-            writer.saveAsTable(table_identifier)
+            self.spark.sparkContext.setJobDescription(
+                f"spine_iceberg_write:{mode}:{self.config.destination}:{self.config.prefix or ''}"
+            )
+            try:
+                writer.saveAsTable(table_identifier)
+            finally:
+                self.spark.sparkContext.setJobDescription("")
         finally:
             self._unset_warehouse_conf()
 
@@ -126,7 +132,7 @@ class IcebergStrategy(BaseLoadStrategy):
                 f"Available columns: {df.columns}"
             )
 
-        df = self._optimize_dataframe(df)
+        df = self._optimize_dataframe_for_write(df)
 
         table_identifier = self._catalog_identifier_from_location(table_location)
         source_view = f"iceberg_merge_source_{uuid.uuid4().hex}"

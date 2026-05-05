@@ -76,7 +76,13 @@ class DeltaStrategy(BaseLoadStrategy):
             write_options["compression"] = self.config.compression
 
         writer = self._prepare_writer(df, write_options)
-        writer.save(table_location)
+        self.spark.sparkContext.setJobDescription(
+            f"spine_delta_write:{mode}:{self.config.destination}:{self.config.prefix or ''}"
+        )
+        try:
+            writer.save(table_location)
+        finally:
+            self.spark.sparkContext.setJobDescription("")
 
     def perform_merge(self, df: DataFrame, table_location: str, merge_keys: List[str]) -> None:
         """Perform Delta Lake MERGE operation (upsert)."""
@@ -88,7 +94,7 @@ class DeltaStrategy(BaseLoadStrategy):
                 f"Available columns: {df.columns}"
             )
 
-        df = self._optimize_dataframe(df)
+        df = self._optimize_dataframe_for_write(df)
 
         delta_table_api = _get_delta_table()
 

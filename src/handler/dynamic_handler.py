@@ -1900,6 +1900,7 @@ class DynamicHandler(BaseHandler):
                         },
                     )
                 select_cols.append(col(f.source).cast("string").alias(f.name))
+            out_df = df.select(*select_cols)
             self.logger.info(
                 "Database extract dataframe built",
                 extra_fields={
@@ -1907,9 +1908,10 @@ class DynamicHandler(BaseHandler):
                     "source": resource_meta.source_name,
                     "request_context_count": request_context_count,
                     "extract_invocations": extract_invocations,
+                    "spark_partitions": out_df.rdd.getNumPartitions(),
                 },
             )
-            return df.select(*select_cols)
+            return out_df
         finally:
             service.close()
 

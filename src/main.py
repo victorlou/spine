@@ -250,14 +250,6 @@ def main(
     Main entry point.
     Loads environment variables and executes the pipeline.
     """
-    import os
-
-    print()
-    print()
-    print(f"PID: {os.getpid()}")
-    print()
-    print()
-    time.sleep(5)
     start = time.perf_counter()
     try:
         # Load environment variables from repo-root (and optional legacy) .env files

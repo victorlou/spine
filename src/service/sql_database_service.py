@@ -17,6 +17,21 @@ from src.utils.redis_context import RedisContextManager
 _SPARK_JDBC_SUBQUERY_ALIAS = "spine_jdbc_subquery"
 
 
+def jdbc_read_mode_label(table_read_options: Optional[TableReadOptions]) -> str:
+    """
+    Classify how Spark JDBC will parallelize the extract for logging.
+
+    Returns one of: ``predicates``, ``partition_range``, ``single_table``.
+    """
+    if table_read_options is None:
+        return "single_table"
+    if table_read_options.predicates:
+        return "predicates"
+    if table_read_options.partition_column:
+        return "partition_range"
+    return "single_table"
+
+
 def jdbc_table_option_from_custom_sql(select_sql: str) -> str:
     """
     Format ``database_select_query`` for Spark ``DataFrameReader.jdbc(..., table=...)``.
@@ -173,6 +188,25 @@ class SqlDatabaseService(BaseSourceService, ABC):
         logger = get_logger(self.__class__.__name__)
 
         try:
+            read_mode = jdbc_read_mode_label(table_read_options)
+            plan_fields: Dict[str, Any] = {
+                **fields,
+                "jdbc_read_mode": read_mode,
+            }
+            if table_read_options is not None:
+                if table_read_options.fetch_size is not None:
+                    plan_fields["fetch_size"] = table_read_options.fetch_size
+                if table_read_options.predicates:
+                    plan_fields["predicates_count"] = len(table_read_options.predicates)
+                if table_read_options.partition_column:
+                    plan_fields["partition_column"] = table_read_options.partition_column
+                    plan_fields["num_partitions"] = table_read_options.num_partitions
+
+            logger.debug(
+                "JDBC extract plan",
+                extra_fields=plan_fields,
+            )
+
             if select_query:
                 logger.debug(
                     f"Extracting data using custom query from '{table_label}'",
@@ -192,7 +226,22 @@ class SqlDatabaseService(BaseSourceService, ABC):
                 table_read_options=table_read_options,
             )
 
-            extra_log: Dict[str, Any] = {**fields}
+            spark_partitions = df.rdd.getNumPartitions()
+
+            logger.debug(
+                "JDBC DataFrame created (lazy; Spark partition count from read plan)",
+                extra_fields={
+                    **fields,
+                    "jdbc_read_mode": read_mode,
+                    "spark_partitions": spark_partitions,
+                },
+            )
+
+            extra_log: Dict[str, Any] = {
+                **fields,
+                "jdbc_read_mode": read_mode,
+                "spark_partitions": spark_partitions,
+            }
             if table_read_options is not None:
                 if table_read_options.fetch_size is not None:
                     extra_log["fetch_size"] = table_read_options.fetch_size

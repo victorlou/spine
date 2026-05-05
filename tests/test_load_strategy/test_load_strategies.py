@@ -204,10 +204,41 @@ def test_optimize_dataframe_coalesces_to_requested_partition_count() -> None:
     df.coalesce.assert_called_once_with(4)
 
 
+def test_optimize_dataframe_for_write_warns_when_coalesce_cannot_increase() -> None:
+    strategy = _strategy(_config(output_partitions=8))
+    df = MagicMock()
+    df.rdd.getNumPartitions.return_value = 1
+    optimized = MagicMock()
+    optimized.rdd.getNumPartitions.return_value = 1
+    df.coalesce.return_value = optimized
+
+    with patch.object(strategy.logger, "warning") as warn_mock:
+        result = strategy._optimize_dataframe_for_write(df)
+
+    warn_mock.assert_called_once()
+    assert result is optimized
+
+
+def test_optimize_dataframe_for_write_no_warn_when_reducing_partitions() -> None:
+    strategy = _strategy(_config(output_partitions=2))
+    df = MagicMock()
+    df.rdd.getNumPartitions.return_value = 8
+    optimized = MagicMock()
+    optimized.rdd.getNumPartitions.return_value = 2
+    df.coalesce.return_value = optimized
+
+    with patch.object(strategy.logger, "warning") as warn_mock:
+        result = strategy._optimize_dataframe_for_write(df)
+
+    warn_mock.assert_not_called()
+    assert result is optimized
+
+
 def _df_with_writer(columns=None):
     df = MagicMock()
     df.columns = columns or ["id", "name"]
     df.coalesce.return_value = df
+    df.rdd.getNumPartitions.return_value = 1
     writer = MagicMock()
     writer.format.return_value = writer
     writer.mode.return_value = writer
@@ -226,14 +257,16 @@ def test_delta_table_exists_checks_delta_log_directory() -> None:
 
 
 def test_delta_write_simple_saves_to_table_location() -> None:
+    spark = MagicMock()
     df, writer = _df_with_writer()
-    strategy = DeltaStrategy(MagicMock(), _object_store(), "s3a://bucket", _config(), None)
+    strategy = DeltaStrategy(spark, _object_store(), "s3a://bucket", _config(), None)
 
     strategy.write_simple(df, "s3a://bucket/source/resource/", mode="overwrite")
 
     writer.format.assert_called_once_with(LoadingFormat.DELTA)
     writer.mode.assert_called_once_with("overwrite")
     writer.save.assert_called_once_with("s3a://bucket/source/resource/")
+    spark.sparkContext.setJobDescription.assert_called()
 
 
 def test_delta_merge_validates_source_merge_keys_before_delta_lookup() -> None:
@@ -351,6 +384,7 @@ def test_iceberg_write_simple_saves_as_catalog_table_and_cleans_conf() -> None:
     writer.format.assert_called_once_with(LoadingFormat.ICEBERG)
     writer.mode.assert_called_once_with("append")
     writer.saveAsTable.assert_called_once_with("iceberg.`source`.`resource`")
+    spark.sparkContext.setJobDescription.assert_called()
     spark.conf.unset.assert_called_once_with("spark.sql.catalog.iceberg.warehouse")
 
 

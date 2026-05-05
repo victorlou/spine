@@ -918,14 +918,6 @@ class TableReadOptions(BaseModel):
         default=None,
         description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
     )
-    log_exact_row_count: bool = Field(
-        default=False,
-        description=(
-            "When True, run df.count() after JDBC read for exact row logging (full scan). "
-            "When False (default), that count is skipped for this resource. Also applies to "
-            "non-parallel reads unless defaults.log_full_row_count is True."
-        ),
-    )
 
     def uses_parallel_read(self) -> bool:
         """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
@@ -1543,15 +1535,6 @@ class DefaultsConfig(BaseModel):
 
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
-    )
-    log_full_row_count: bool = Field(
-        default=False,
-        description=(
-            "When True, run Spark df.count() for exact row totals in handler summaries and "
-            "allow the same for database extracts unless overridden per-resource. When False "
-            "(default), database extracts skip full counts unless table_read_options.log_exact_row_count "
-            "is set, and the handler uses a lightweight non-empty check instead of counting all rows."
-        ),
     )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(

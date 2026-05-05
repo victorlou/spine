@@ -15,7 +15,7 @@ from src.utils.exceptions import ServiceError
 
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
-        pipeline_config=SimpleNamespace(defaults=SimpleNamespace(log_full_row_count=False)),
+        pipeline_config=SimpleNamespace(defaults=SimpleNamespace()),
         api=SimpleNamespace(TIMEOUT=5),
     )
 
@@ -246,7 +246,7 @@ def test_sql_extract_table_raises_service_error_on_loader_exception() -> None:
         svc.extract_table("public", "users", spark_session=MagicMock())
 
 
-def test_sql_extract_table_logs_without_count_when_disabled() -> None:
+def test_sql_extract_table_never_calls_count_for_logging() -> None:
     class _Stub(SqlDatabaseService):
         def _table_label_for_log(self, schema: str, table: str) -> str:
             return f"{schema}.{table}"
@@ -265,33 +265,3 @@ def test_sql_extract_table_logs_without_count_when_disabled() -> None:
     svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
     df = svc.extract_table("public", "users", spark_session=MagicMock())
     df.count.assert_not_called()
-
-
-def test_sql_extract_table_logs_exact_count_when_requested() -> None:
-    class _Stub(SqlDatabaseService):
-        def _table_label_for_log(self, schema: str, table: str) -> str:
-            return f"{schema}.{table}"
-
-        def _load_dataframe(
-            self, spark_session, schema, table, select_query, table_read_options=None
-        ):
-            return MagicMock(count=MagicMock(return_value=7))
-
-        def connect(self) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
-    read_opts = SimpleNamespace(
-        fetch_size=1000,
-        predicates=["id > 1"],
-        partition_column="id",
-        num_partitions=2,
-        log_exact_row_count=True,
-    )
-    df = svc.extract_table(
-        "public", "users", spark_session=MagicMock(), table_read_options=read_opts
-    )
-    df.count.assert_called_once()

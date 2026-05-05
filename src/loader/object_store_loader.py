@@ -351,9 +351,18 @@ class ObjectStoreLoader(BaseLoader):
                 extra_fields={"format": config.format},
             )
 
-            return self._load_file_based(
+            written = self._load_file_based(
                 df, config, base_uri=base_uri, source_type=source_type, **kwargs
             )
+            self.logger.info(
+                "Object store load finished",
+                extra_fields={
+                    "destination": config.destination,
+                    "format": config.format,
+                    "path": written,
+                },
+            )
+            return written
 
         # initialize load_strategy
         load_strategy = LoadStrategyFactory.create_load_strategy(
@@ -365,7 +374,16 @@ class ObjectStoreLoader(BaseLoader):
         )
 
         # use load_strategy to write data for table formats (Delta, Iceberg)
-        return load_strategy.write(df, **kwargs)
+        written = load_strategy.write(df, **kwargs)
+        self.logger.info(
+            "Object store load finished",
+            extra_fields={
+                "destination": config.destination,
+                "format": config.format,
+                "path": written,
+            },
+        )
+        return written
 
     def destination_exists(
         self,

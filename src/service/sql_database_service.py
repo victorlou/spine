@@ -202,23 +202,10 @@ class SqlDatabaseService(BaseSourceService, ABC):
                     extra_log["partition_column"] = table_read_options.partition_column
                     extra_log["num_partitions"] = table_read_options.num_partitions
 
-            defaults = self.settings.pipeline_config.defaults
-            should_count = defaults.log_full_row_count or (
-                table_read_options is not None and table_read_options.log_exact_row_count
+            logger.info(
+                f"Successfully extracted from '{table_label}'",
+                extra_fields=extra_log,
             )
-
-            if should_count:
-                row_count = df.count()
-                logger.info(
-                    f"Successfully extracted {row_count} rows from '{table_label}'",
-                    extra_fields={**extra_log, "row_count": row_count},
-                )
-            else:
-                logger.info(
-                    f"Successfully extracted from '{table_label}' (exact row count skipped; "
-                    f"set defaults.log_full_row_count or table_read_options.log_exact_row_count for counts)",
-                    extra_fields=extra_log,
-                )
             return df
 
         except ServiceError:

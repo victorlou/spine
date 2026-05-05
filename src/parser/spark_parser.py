@@ -135,7 +135,6 @@ class SparkParser:
                 extra_fields={
                     "columns": df.columns,
                     "schema": str(df.schema),
-                    "row_count": df.count(),
                     "sample_row": {
                         k: str(v)[:100] + "..." if isinstance(v, str) and len(str(v)) > 100 else v
                         for k, v in sample_data.items()

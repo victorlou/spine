@@ -6,9 +6,6 @@ defaults:
     initial_delay: 1
     backoff_factor: 2
 
-  # Default is false, when true, run Spark df.count() for exact row totals in logs and summaries (full scan).
-  log_full_row_count: false
-
   # Default loading: local Delta; relative storage_root resolves under the repository
   #   root (dir containing src/), e.g. repo/.spine/local-output (gitignored).
   # Override per resource if needed, or replace this block with S3 (see commented example below).

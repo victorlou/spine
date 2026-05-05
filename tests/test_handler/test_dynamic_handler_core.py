@@ -9,12 +9,14 @@ from pyspark.sql import DataFrame as SparkDataFrame
 
 from src.config.config_models import (
     LoadingConfig,
+    LoadingFormat,
     PaginationConfig,
     RequestInputConfig,
     ResourceConfig,
     SourceType,
 )
 from src.handler.dynamic_handler import DynamicHandler, RawDataBatch
+from src.planner.execution_plan import ResourceMetadata
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicSourceReference,
@@ -307,7 +309,6 @@ def test_process_resource_partial_failure_when_some_contexts_fail(
     h.backfill_mode = False
     h.record_limit = None
     h.config.defaults = SimpleNamespace(
-        log_full_row_count=False,
         streaming=SimpleNamespace(
             enable_streaming=False,
             mode="redis",
@@ -351,13 +352,74 @@ def test_process_resource_partial_failure_when_some_contexts_fail(
     assert out["status"] == "partial_failure"
 
 
+def test_process_resource_database_source_does_not_cache_dataframe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Database path does not call DataFrame.cache() before probe/write."""
+    h = _bare_handler()
+    h.spark = MagicMock()
+    h.backfill_mode = False
+    h.record_limit = None
+    h.config.defaults = SimpleNamespace(
+        streaming=SimpleNamespace(
+            enable_streaming=False,
+            mode="redis",
+            flush_threshold=2,
+            disk_config=SimpleNamespace(path="/tmp", file_size_threshold=10),
+        ),
+    )
+    loading = LoadingConfig(
+        destination="s3",
+        s3_bucket="bucket",
+        prefix="sap/vbrp",
+        format=LoadingFormat.DELTA,
+    )
+    h.execution_plan = SimpleNamespace(
+        has_batch_inputs=lambda *_a, **_k: False,
+        get_dependent_resources=lambda *_a, **_k: [],
+        get_source_config=lambda *_a, **_k: SimpleNamespace(type=SourceType.HANA),
+        get_dependent_loading_configs=lambda *_a, **_k: [],
+    )
+    h._resolve_resource_loading = MagicMock(return_value=loading)
+    h._generate_all_request_contexts = MagicMock(return_value=[{}])
+    df = MagicMock()
+    df.take = MagicMock(return_value=[MagicMock()])
+    h._build_database_dataframe = MagicMock(return_value=df)
+    mock_loader = MagicMock()
+    mock_loader.load = MagicMock(return_value="s3a://bucket/sap/vbrp")
+    mock_factory = MagicMock()
+    mock_factory.create_loader.return_value = mock_loader
+    monkeypatch.setattr("src.handler.dynamic_handler.LoaderFactory", mock_factory)
+
+    resource_meta = ResourceMetadata(
+        source_name="sap",
+        resource_name="vbrp",
+        dependencies=set(),
+        batch_inputs={},
+        config=ResourceConfig(
+            method="GET",
+            database_schema="SAPHANADB",
+            database_table="/BIC/AZ",
+            loading=loading,
+        ),
+    )
+    out = h._process_resource(
+        resource_meta=resource_meta,
+        service=MagicMock(source_name="sap"),
+        source_config=SimpleNamespace(type=SourceType.HANA),
+    )
+    assert out["status"] == "success"
+    df.cache.assert_not_called()
+    df.unpersist.assert_not_called()
+    mock_loader.load.assert_called_once()
+
+
 def test_process_resource_failed_when_all_contexts_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     h = _bare_handler()
     h.spark = MagicMock()
     h.backfill_mode = False
     h.record_limit = None
     h.config.defaults = SimpleNamespace(
-        log_full_row_count=False,
         streaming=SimpleNamespace(
             enable_streaming=False,
             mode="redis",

@@ -77,6 +77,15 @@ def test_postgres_jdbc_url_and_load_dataframe_branches() -> None:
     out = pg._load_dataframe(spark, "public", "users", None, table_read_options=None)
     assert out == "df"
     spark.read.jdbc.assert_called()
+    props_default = spark.read.jdbc.call_args.kwargs["properties"]
+    assert "pushDownLimit" not in props_default
+
+    spark.read.jdbc.reset_mock()
+    out2 = pg._load_dataframe(spark, "public", "users", "SELECT 1 AS x", table_read_options=None)
+    assert out2 == "df"
+    props_custom = spark.read.jdbc.call_args.kwargs["properties"]
+    assert props_custom.get("pushDownLimit") == "false"
+    assert props_custom.get("pushDownOffset") == "false"
 
 
 def test_sql_database_service_guard_rails() -> None:
@@ -220,6 +229,13 @@ def test_hana_load_dataframe_routes_by_options(
     kwargs = spark.read.jdbc.call_args.kwargs
     for key, value in expected_kwargs.items():
         assert kwargs[key] == value
+    props = kwargs["properties"]
+    if select_query:
+        assert props.get("pushDownLimit") == "false"
+        assert props.get("pushDownOffset") == "false"
+    else:
+        assert "pushDownLimit" not in props
+        assert "pushDownOffset" not in props
 
 
 def test_sql_extract_table_ensure_prerequisites_hook_runs() -> None:

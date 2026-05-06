@@ -28,7 +28,7 @@ Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, a
 
 **Branch protection:** add **`dev-image-smoke`** as a required check for **`main`** if merges should be blocked when it fails (Settings → rules / branch protection).
 
-**Cleanup** ([`.github/workflows/ghcr-cleanup.yml`](../.github/workflows/ghcr-cleanup.yml)): weekly job keeps **`latest`**, **`dev`**, **`v*`**, then the **three newest** package versions that carry **`dev-<short_sha>`** but **not** the rolling **`dev`** tag; a follow-up step keeps **10** other tagged versions and drops untagged (`keep-n-tagged` / `keep-n-untagged` in the workflow).
+**Cleanup** ([`.github/workflows/ghcr-cleanup.yml`](../.github/workflows/ghcr-cleanup.yml)): weekly job keeps **`latest`**, **`dev`**, **`v*`**, then the **three newest** package versions that carry **`dev-<short_sha>`** but **not** the rolling **`dev`** tag; a follow-up step keeps **5** other tagged versions and drops untagged (`keep-n-tagged` / `keep-n-untagged` in the workflow).
 
 ```bash
 docker buildx imagetools inspect ghcr.io/victorlou/spine:latest

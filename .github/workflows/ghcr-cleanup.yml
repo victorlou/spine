@@ -32,7 +32,7 @@ jobs:
           OWNER="${{ steps.package.outputs.owner }}"
           PACKAGE="${{ steps.package.outputs.repository }}"
           KEEP_TRACE=3
-          owner_type="$(gh api "repos/${{ github.repository }}" --jq '.owner.type' | jq -r .)"
+          owner_type="$(gh api "repos/${{ github.repository }}" --template '{{.owner.type}}')"
           if [ "${owner_type}" = "Organization" ]; then
             PKG_ROOT="orgs/${OWNER}/packages/container/${PACKAGE}"
           else
@@ -63,5 +63,5 @@ jobs:
           repository: ${{ steps.package.outputs.repository }}
           package: ${{ steps.package.outputs.repository }}
           exclude-tags: ^(?:latest|dev|v.*)$
-          keep-n-tagged: 10
+          keep-n-tagged: 5
           keep-n-untagged: 0

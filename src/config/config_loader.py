@@ -96,9 +96,13 @@ class ConfigLoader:
             # Resolve relative local loading storage_root against repository root (see repository_root)
             raw_config = self._resolve_local_loading_storage_paths(raw_config)
 
+            # Resolve relative spark_event_log_dir under repository root (same anchor as storage_root)
+            raw_config = self._resolve_spark_runtime_event_log_dir(raw_config)
+
             # Process configuration
             processed_config = self._process_config(raw_config)
             processed_config["config_root"] = config_path.resolve()
+            processed_config["runtime_selection"] = selection
 
             # Validate with Pydantic
             try:
@@ -356,6 +360,31 @@ class ConfigLoader:
                     if isinstance(loading, dict):
                         resolve_loading_dict(loading)
 
+        return config
+
+    def _resolve_spark_runtime_event_log_dir(
+        self, config: Dict[str, Any], layout_root: Optional[Path] = None
+    ) -> Dict[str, Any]:
+        """
+        Resolve relative ``defaults.spark_runtime.spark_event_log_dir`` against the repository root.
+
+        Same anchor as ``storage_root`` for ``destination: local``: the directory that contains
+        ``src/``. Absolute paths and non-string values are left unchanged.
+        """
+        root = (layout_root if layout_root is not None else repository_root()).resolve()
+        defaults = config.get("defaults")
+        if not isinstance(defaults, dict):
+            return config
+        spark_rt = defaults.get("spark_runtime")
+        if not isinstance(spark_rt, dict):
+            return config
+        d = spark_rt.get("spark_event_log_dir")
+        if not isinstance(d, str):
+            return config
+        p = Path(d).expanduser()
+        if p.is_absolute():
+            return config
+        spark_rt["spark_event_log_dir"] = str((root / p).resolve())
         return config
 
     def _traverse_dict(

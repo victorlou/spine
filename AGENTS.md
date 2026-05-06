@@ -13,7 +13,9 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - `src/parser/`: lightweight transformations over collected data
 - `src/collector/`: collection/storage strategy during extraction
 - `src/loader/`: destination loading (S3, local, …), Spark writes, and `object_store` / `local_storage` helpers
+- `src/load_strategy/`: table-format write orchestration and Delta/Iceberg strategy implementations
 - `config/`: operator-local YAML and SQL; committed files here are templates and examples
+- `scripts/`: operator CLIs (`python -m scripts.*`) and optional dev helpers
 
 ## Working Rules
 
@@ -32,13 +34,14 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - Do not commit operator-local config, secrets, or internal-only endpoints. Public templates live in `config/defaults.example.yml` and `config/examples/`.
 - If you change config schema, also update the relevant examples and docs in `config/README.md` and `docs/configuration/`.
 - Respect `CONFIG_PATH` behavior in `src/config/settings.py` when changing config resolution.
-- Loading identity strings (object-store bucket/container/account labels, slash-trimmed `prefix`, REST `base_url` trailing slashes) are normalized during Pydantic validation. Destination aliases and those normalizers live in `src/config/loading_schema.py`. Spark base URIs use `loading_base_uri(LoadingConfig)` in `src/loader/object_store.py`: it expects **validated** config only and does not re-normalize identity fields (resolve `storage_root` to `file:` URIs still happens there). CLI-only inputs—for example operator `s3://` URIs for config promotion—normalize once at parse time in `src/utils/s3_config_push.parse_s3_uri`, not via pipeline loading validators. Path joining for Spark segments and HTTP URL composition remain in loader/service helpers.
+- Loading identity strings (object-store bucket/container/account labels, slash-trimmed `prefix`, REST `base_url` trailing slashes) are normalized during Pydantic validation. Destination aliases and those normalizers live in `src/config/loading_schema.py`. Spark base URIs use `loading_base_uri(LoadingConfig)` in `src/loader/object_store.py`: it expects **validated** config only and does not re-normalize identity fields (resolve `storage_root` to `file:` URIs still happens there). CLI-only inputs—for example operator `s3://` URIs for config promotion—normalize once at parse time in `scripts/s3_config_push.parse_s3_uri`, not via pipeline loading validators. Path joining for Spark segments and HTTP URL composition remain in loader/service helpers.
 
 ## Extending Spine
 
 - New auth behavior: extend the service/auth configuration model and validation together.
-- New destination: add a loader under `src/loader/`, register it in `src/loader/loader_factory.py` under the **canonical** destination id (see `src/config/loading_schema.py` for object-store destinations, aliases, and `normalize_loading_destination`), and document any new config. If Spark needs filesystem or connector wiring, extend `src/config/config_spark.py` (`SparkSessionConf`), `src/config/spark_runtime.py`, and `defaults.spark_runtime` in the same change set so behavior stays configuration-first.
-- New source/service type: implement it under `src/service/`, wire it through the factory/config models, and avoid bypassing planner/handler flow. For a new **relational database** kind that shares the same table/query extract and request-context rules, add its `SourceType` to `is_database_source_type()` in `src/config/config_models.py` (that function is the only database-kind predicate; call it from planner, handler, and validators rather than re-listing types).
+- New destination: add a loader under `src/loader/`, register it in `src/loader/loader_factory.py` under the **canonical** destination id (see `src/config/loading_schema.py` for object-store destinations, aliases, and `normalize_loading_destination`), and document any new config. If Spark needs filesystem or connector wiring, extend `src/config/config_spark.py` (`SparkSessionConf`), `src/config/spark_runtime.py`, and `defaults.spark_runtime` in the same change set so behavior stays configuration-first. Spark Web UI, console progress, and optional event logging are controlled by `defaults.spark_runtime` (`spark_ui_*`, `spark_event_log_*`) and applied in `SparkSessionConf`.
+- New table format: add a strategy under `src/load_strategy/` and register it in `src/load_strategy/load_strategy_factory.py`. Keep write-mode routing in `BaseLoadStrategy`; implement format-specific simple writes, merge execution, identifier resolution, and existence checks in the concrete strategy instead of adding table-format branches to `ObjectStoreLoader`.
+- New source/service type: implement it under `src/service/`, wire it through the factory/config models, and avoid bypassing planner/handler flow. For a new **relational database** kind that shares the same table/query extract and request-context rules, add its `SourceType` to `is_database_source_type()` in `src/config/config_models.py` (that function is the only database-kind predicate; call it from planner, handler, and validators rather than re-listing types). Spark JDBC reads that use `database_select_query` must go through `SqlDatabaseService._jdbc_read_connection_properties` (or equivalent) so Spark V2 LIMIT/OFFSET pushdown stays disabled for custom SQL; extend `HanaService`/`PostgresService` patterns rather than calling `_build_connection_properties` alone for `read.jdbc`.
 - New transformation or collection behavior should fit the existing parser/collector split rather than being embedded ad hoc in services.
 
 ## Quality Bar
@@ -48,12 +51,14 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - Avoid hidden coupling across modules. If a change affects planning, config, and runtime behavior, update all three deliberately.
 - Be skeptical of convenience shortcuts that weaken validation, observability, or repeatability.
 - Prefer the smallest change that keeps the design clean. Avoid introducing new abstractions, flags, or special cases unless they clearly earn their keep.
+- Shared baseline test isolation for managed Spark platform env signals lives in `tests/conftest.py`: use `clear_managed_platform_env` and `MANAGED_PLATFORM_ENV_KEYS` instead of copying the env-var tuple into individual modules.
 - **No issue or PR references in implementation code** — Do not put GitHub issue numbers, pull request numbers, or links in source comments, docstrings, or user-facing error messages. Traceability belongs in commit messages and PR descriptions (see **GitHub issues** below). Describe behavior objectively so docs and errors stay accurate as new source types are added (avoid hardcoding today's short list of database or API names unless the text is truly specific to one integration).
 
 ## Docs Expectations
 
 - Keep the `README.md` practical and honest. Personality is fine, but claims should match the implementation.
 - Use `docs/getting-started.md`, `docs/deployment.md`, and `docs/configuration/` as the source of truth for setup and behavior details.
+- GHCR image tags (`latest`, rolling `dev`, short-lived `dev-<short_sha>` traces, `v*`), PR Docker path gates, promotion smoke, and registry cleanup live in `docs/deployment.md`, `docker/README.md`, and `docs/development.md`; update them when CI or publishing behavior changes.
 - Write for someone discovering the project for the first time. Prefer direct, timeless descriptions of behavior and configuration. Avoid framing docs around past releases or repo history (for example “unchanged from earlier versions”, “previously”, “now you can”) unless you are explicitly documenting a breaking migration or upgrade path.
 
 ## GitHub issues

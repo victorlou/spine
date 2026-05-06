@@ -10,7 +10,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Optional
 
 from src.config.config_models import ConnectorProvisionMode, SparkRuntimeConfig, SparkRuntimeProfile
 
@@ -86,6 +87,21 @@ def _resolve_connector_mode(
     return "packages"
 
 
+def normalize_spark_event_log_uri(dir_str: str) -> str:
+    """
+    Normalize operator-supplied ``spark_event_log_dir`` to a URI Spark accepts.
+
+    Absolute ``file:`` / cloud URIs are returned unchanged; bare filesystem paths become ``file:`` URIs.
+    """
+    s = str(dir_str).strip()
+    lower = s.lower()
+    if lower.startswith(
+        ("file:", "s3a:", "s3:", "hdfs:", "gs:", "abfss:", "abfs:", "wasb:", "wasbs:")
+    ):
+        return s
+    return str(Path(s).expanduser().resolve().as_uri())
+
+
 @dataclass(frozen=True)
 class ResolvedSparkRuntime:
     """Effective Spark bootstrap decisions after YAML + env + detection."""
@@ -96,13 +112,22 @@ class ResolvedSparkRuntime:
     gcs_connector_mode: ProvisionLiteral
     azure_connector_mode: ProvisionLiteral
     detection_source: str
+    spark_ui_enabled: bool
+    spark_ui_port: Optional[int]
+    spark_ui_show_console_progress: bool
+    spark_event_log_enabled: bool
+    spark_event_log_dir_uri: Optional[str]
+    spark_event_log_compress: bool
 
     def summary_for_log(self) -> str:
-        return (
+        parts = [
             f"spark_runtime profile={self.effective_profile} platform={self.managed_platform.value} "
             f"({self.detection_source}) s3={self.s3_connector_mode} gcs={self.gcs_connector_mode} "
-            f"azure={self.azure_connector_mode}"
-        )
+            f"azure={self.azure_connector_mode}",
+            f"spark_ui={self.spark_ui_enabled}",
+            f"spark_event_log={self.spark_event_log_enabled}",
+        ]
+        return "; ".join(parts)
 
 
 def resolve_spark_runtime(config: SparkRuntimeConfig) -> ResolvedSparkRuntime:
@@ -121,9 +146,18 @@ def resolve_spark_runtime(config: SparkRuntimeConfig) -> ResolvedSparkRuntime:
         connector_modes[resolved_field] = _resolve_connector_mode(
             env_key, getattr(config, cfg_attr), platform, external_defaults
         )
+    event_uri: Optional[str] = None
+    if config.spark_event_log_enabled and config.spark_event_log_dir:
+        event_uri = normalize_spark_event_log_uri(config.spark_event_log_dir)
     return ResolvedSparkRuntime(
         managed_platform=platform,
         effective_profile=effective,
         detection_source=detection_source,
+        spark_ui_enabled=config.spark_ui_enabled,
+        spark_ui_port=config.spark_ui_port,
+        spark_ui_show_console_progress=config.spark_ui_show_console_progress,
+        spark_event_log_enabled=config.spark_event_log_enabled,
+        spark_event_log_dir_uri=event_uri,
+        spark_event_log_compress=config.spark_event_log_compress,
         **connector_modes,
     )

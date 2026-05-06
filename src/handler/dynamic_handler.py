@@ -66,6 +66,10 @@ from src.utils.snapshot_poller import (
     SnapshotTimeoutError,
 )
 
+# Maximum number of distinct values collected from a SOURCE parameter field for request fan-out.
+# Exceeding this limit would cause an unbounded number of API requests and OOM the driver.
+_MAX_SOURCE_DISTINCT_VALUES = 10_000
+
 
 def _sigterm_handler(signum: int, frame: Any) -> None:
     """Raise GracefulShutdownError so handle()'s finally block runs and audit is flushed."""
@@ -317,7 +321,7 @@ class DynamicHandler(BaseHandler):
                                 f"Available columns: {source_data.columns}"
                             )
                         df_filtered = source_data.filter(col(field).isNotNull())
-                        values = df_filtered.select(field).collect()
+                        values = df_filtered.select(field).limit(1).collect()
                         if values:
                             # Use only the first value for header (headers must be single-valued)
                             resolved_headers[header_name] = str(values[0][field])
@@ -602,14 +606,6 @@ class DynamicHandler(BaseHandler):
                 return resolved_value
             return [resolved_value] if resolved_value is not None else []
 
-        # Single static value
-        if input_config.value is not None:
-            value = input_config.value
-            # If it's a dict, resolve nested values
-            if isinstance(value, dict):
-                value = self._resolve_nested_value_in_dict(input_name, value)
-            return [value]
-
         raise HandlerError(f"No source or value defined for input '{input_name}'")
 
     def _resolve_from_parent_resource(
@@ -760,7 +756,13 @@ class DynamicHandler(BaseHandler):
             )
 
         df = df.filter(col(field).isNotNull())
-        values = df.select(field).distinct().collect()
+        values = df.select(field).distinct().limit(_MAX_SOURCE_DISTINCT_VALUES + 1).collect()
+        if len(values) > _MAX_SOURCE_DISTINCT_VALUES:
+            raise HandlerError(
+                f"SOURCE field '{field}' has more than {_MAX_SOURCE_DISTINCT_VALUES} distinct "
+                "values. This would generate too many requests. Add a filter or reduce cardinality.",
+                details={"field": field, "max_allowed": _MAX_SOURCE_DISTINCT_VALUES},
+            )
         return [row[field] for row in values]
 
     def _apply_parameter_filter(
@@ -1878,7 +1880,7 @@ class DynamicHandler(BaseHandler):
                 fields = configured_fields
             else:
                 fields = [SchemaField(name=c, source=c) for c in df.columns]
-                self.logger.info(
+                self.logger.trace(
                     "Database extract has no configured fields; inferring output columns from extract",
                     extra_fields={
                         "resource_name": resource_meta.resource_name,
@@ -1898,6 +1900,7 @@ class DynamicHandler(BaseHandler):
                         },
                     )
                 select_cols.append(col(f.source).cast("string").alias(f.name))
+            out_df = df.select(*select_cols)
             self.logger.info(
                 "Database extract dataframe built",
                 extra_fields={
@@ -1905,9 +1908,10 @@ class DynamicHandler(BaseHandler):
                     "source": resource_meta.source_name,
                     "request_context_count": request_context_count,
                     "extract_invocations": extract_invocations,
+                    "spark_partitions": out_df.rdd.getNumPartitions(),
                 },
             )
-            return df.select(*select_cols)
+            return out_df
         finally:
             service.close()
 
@@ -2152,11 +2156,6 @@ class DynamicHandler(BaseHandler):
                         "Finalized streaming collector",
                         extra_fields={
                             "has_transformations": bool(resource_meta.config.transformations),
-                            "record_count": (
-                                all_data_df.count()
-                                if all_data_df and self.config.defaults.log_full_row_count
-                                else None
-                            ),
                             "collector_type": type(collector).__name__,
                         },
                     )
@@ -2191,11 +2190,6 @@ class DynamicHandler(BaseHandler):
                     self.logger.trace(
                         "Applying transformations to complete data",
                         extra_fields={
-                            "record_count": (
-                                all_data_df.count()
-                                if self.config.defaults.log_full_row_count
-                                else None
-                            ),
                             "transformation_count": len(resource_meta.config.transformations),
                         },
                     )
@@ -2231,85 +2225,83 @@ class DynamicHandler(BaseHandler):
                             all_data_df, request_context=request_context
                         )
 
-                all_data_df = all_data_df.cache()
-
             # Store and process results
-            try:
-                if all_data_df is not None:
-                    if self.config.defaults.log_full_row_count:
-                        record_count = all_data_df.count()
-                        has_data = record_count > 0
+            if all_data_df is not None:
+                has_data = len(all_data_df.take(1)) > 0
+                record_count = None
+
+                if has_data:
+                    # Store in Redis only when this resource has downstream dependents (needed for SOURCE params)
+                    dependent_resources = self.execution_plan.get_dependent_resources(
+                        source_name, resource_name
+                    )
+                    if dependent_resources:
+                        redis_key = self._get_redis_key(source_name, resource_name)
+                        self.redis_context.store(key=redis_key, data=all_data_df)
                     else:
-                        has_data = len(all_data_df.take(1)) > 0
-                        record_count = None
-
-                    if has_data:
-                        # Store in Redis only when this resource has downstream dependents (needed for SOURCE params)
-                        dependent_resources = self.execution_plan.get_dependent_resources(
-                            source_name, resource_name
-                        )
-                        if dependent_resources:
-                            redis_key = self._get_redis_key(source_name, resource_name)
-                            self.redis_context.store(key=redis_key, data=all_data_df)
-                        else:
-                            self.logger.trace(
-                                "Skipping Redis store (no downstream dependents)",
-                                extra_fields={
-                                    "source": source_name,
-                                    "resource_name": resource_name,
-                                },
-                            )
-
-                        # Load data if we have records and loading is configured
-                        location = None
-                        if self.record_limit is None and effective_loading:
-                            loader = LoaderFactory.create_loader(effective_loading)
-                            if hasattr(loader, "set_spark_session"):
-                                loader.set_spark_session(self.spark)
-
-                            # Get source type from source config to prefix the path
-                            source_config = self.execution_plan.get_source_config(source_name)
-                            source_type = source_config.type if source_config else None
-
-                            location = loader.load(
-                                data=all_data_df,
-                                config=effective_loading,
-                                source_type=source_type,
-                            )
-
-                        status = "partial_failure" if failed_context_count > 0 else "success"
-                        return {
-                            "count": record_count,
-                            "location": location,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "status": status,
-                        }
-
-                status = (
-                    "failed"
-                    if total_contexts > 0 and failed_context_count == total_contexts
-                    else "success"
-                )
-                return {
-                    "count": 0,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "warning": "No data returned from source",
-                    "status": status,
-                }
-            finally:
-                # CRITICAL: Unpersist cached DataFrame to free memory
-                if all_data_df is not None:
-                    try:
-                        all_data_df.unpersist(blocking=True)
                         self.logger.trace(
-                            "Unpersisted cached DataFrame",
-                            extra_fields={"resource_name": resource_name, "source": source_name},
+                            "Skipping Redis store (no downstream dependents)",
+                            extra_fields={
+                                "source": source_name,
+                                "resource_name": resource_name,
+                            },
                         )
-                    except Exception as e:
-                        self.logger.warning(
-                            "Failed to unpersist DataFrame",
-                            extra_fields={"error": str(e), "resource_name": resource_name},
+
+                    # Load data if we have records and loading is configured
+                    location = None
+                    if self.record_limit is None and effective_loading:
+                        loader = LoaderFactory.create_loader(effective_loading)
+                        if hasattr(loader, "set_spark_session"):
+                            loader.set_spark_session(self.spark)
+
+                        # Get source type from source config to prefix the path
+                        source_config = self.execution_plan.get_source_config(source_name)
+                        source_type = source_config.type if source_config else None
+
+                        self.logger.info(
+                            "Starting destination load",
+                            extra_fields={
+                                "resource_name": resource_name,
+                                "source": source_name,
+                                "destination": effective_loading.destination,
+                                "format": str(effective_loading.format),
+                                "database_source": is_db,
+                            },
                         )
+                        location = loader.load(
+                            data=all_data_df,
+                            config=effective_loading,
+                            source_type=source_type,
+                        )
+                        self.logger.info(
+                            "Finished destination load",
+                            extra_fields={
+                                "resource_name": resource_name,
+                                "source": source_name,
+                                "location": location,
+                                "database_source": is_db,
+                            },
+                        )
+
+                    status = "partial_failure" if failed_context_count > 0 else "success"
+                    return {
+                        "count": record_count,
+                        "location": location,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "status": status,
+                    }
+
+            status = (
+                "failed"
+                if total_contexts > 0 and failed_context_count == total_contexts
+                else "success"
+            )
+            return {
+                "count": 0,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "warning": "No data returned from source",
+                "status": status,
+            }
 
         except Exception as e:
             # Wrap exception with context - caller will handle logging

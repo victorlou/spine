@@ -20,30 +20,22 @@ For full details (CLI args, Apple Silicon), see [docker/README.md](../docker/REA
 
 ## CI and container images (GitHub Actions)
 
-Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, and on **version tag** pushes (`v*`), via [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, and on **`v*`** tag pushes, via [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
-The workflow **builds and pushes** a multi-arch container image (manifest list for `linux/amd64` and `linux/arm64`) to the [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) (`ghcr.io`) on pushes to **`main`** and on **`v*` tags** (for example `ghcr.io/victorlou/spine:latest` plus a SHA tag on `main`, and `ghcr.io/victorlou/spine:v1.2.3` when you push tag `v1.2.3`). Pushes to `dev` only run lint and tests.
+**GHCR publishes** a multi-arch image (`linux/amd64`, `linux/arm64`) on pushes to **`main`** (`latest` + SHA metadata), **`dev`** (mutable **`dev`** plus **`dev-<short_sha>`** traces), and **`v*`** tags. Multi-arch manifests explain multiple digests per logical tag.
 
-The package may show multiple digests for a single publish. That is expected for multi-arch images: one top-level manifest list plus child manifests for each architecture.
+**PRs:** optional Docker **build** (no push) and **`docker run … --show-plan`** smoke run only when the diff touches **`docker/**`**, **`requirements*.txt`**, or **`src/**`** (see path filter comment in `ci.yml`). **`dev-image-smoke`** runs on PRs **`dev` → `main`**: pulls the published **`ghcr.io/<owner>/<repo>:dev`** (lowercase path), mounts example config at **`/config`**, runs **`--show-plan`** (tests the registry’s **`:dev`**, not necessarily the PR’s merge preview until `dev` is pushed). Requires **`packages: read`**. Fork PRs use the fork’s package coordinates; promotion is normally same-repo.
 
-Requirements for the image job:
+**Branch protection:** add **`dev-image-smoke`** as a required check for **`main`** if merges should be blocked when it fails (Settings → rules / branch protection).
 
-- **Packages** permission for `GITHUB_TOKEN` (the workflow grants `packages: write` on the publish job only).
-
-Images are public or private according to your GitHub package visibility settings for the container package.
-
-After publish, you can verify manifest platforms with:
+**Cleanup** ([`.github/workflows/ghcr-cleanup.yml`](../.github/workflows/ghcr-cleanup.yml)): weekly job keeps **`latest`**, **`dev`**, **`v*`**, then the **three newest** package versions that carry **`dev-<short_sha>`** but **not** the rolling **`dev`** tag; a follow-up step keeps **5** other tagged versions and drops untagged (`keep-n-tagged` / `keep-n-untagged` in the workflow).
 
 ```bash
 docker buildx imagetools inspect ghcr.io/victorlou/spine:latest
+docker buildx imagetools inspect ghcr.io/victorlou/spine:dev
 ```
 
-A separate weekly cleanup workflow keeps the registry tidy while preserving multi-arch integrity:
-
-- keep `latest`
-- keep all `v*` tags
-- keep the 10 most recent SHA tags
-- delete untagged versions
+Publish job needs **`packages: write`** on `GITHUB_TOKEN`. Image visibility follows the package settings on GitHub.
 
 ## Runtime configuration
 
@@ -54,7 +46,7 @@ A separate weekly cleanup workflow keeps the registry tidy while preserving mult
 - Prefer **`defaults.spark_runtime`** in `defaults.yml` for Spark host profile and symmetric S3/GCS/Azure connector provisioning (`packages` vs `external`). Spine detects common managed environments (Databricks, EMR, ECS, Kubernetes) when `profile` is `auto`.
 - Optional environment overrides (for CI or images that cannot edit YAML): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (shaded GCS connector URL for `spark.jars` when mode is `packages`), `SPARK_AZURE_CONNECTOR_MODE`, `SPINE_GCS_AUTH_TYPE` (defaults to `APPLICATION_DEFAULT`; set `COMPUTE_ENGINE` only when intentionally relying on metadata auth). When unset, YAML and auto-detection drive behavior.
 - Destination preflight filesystem timeout can be tuned with `SPINE_DESTINATION_PREFLIGHT_FILESYSTEM_TIMEOUT_SECONDS` (default `45`). This applies to Hadoop `FileSystem.get(...)` and root listing probes across S3/GCS/Azure so hangs fail fast with actionable logs.
-- For **ECS Fargate**, promoting config to **S3**, optional **`SPINE_CONFIG_S3_URI`** pull at container start (boto3), GHCR image pinning, and task-definition patterns (all placeholders), see the [ECS + S3 reference](deployment/ecs-s3-reference.md), including `python -m src.utils.s3_config_push` for one-off or CI uploads.
+- For **ECS Fargate**, promoting config to **S3**, optional **`SPINE_CONFIG_S3_URI`** pull at container start (boto3), GHCR image pinning, and task-definition patterns (all placeholders), see the [ECS + S3 reference](deployment/ecs-s3-reference.md), including `python -m scripts.s3_config_push` for one-off or CI uploads.
 
 ## Error Handling and Monitoring
 

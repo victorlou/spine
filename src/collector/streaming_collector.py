@@ -115,7 +115,7 @@ class StreamingRawDataCollector:
         # Parse current batches
         current_df = self._parse_batches()
 
-        if current_df is not None and current_df.count() > 0:
+        if current_df is not None and not current_df.rdd.isEmpty():
             # Merge with accumulated data
             if self.total_parsed_df is None:
                 self.total_parsed_df = current_df

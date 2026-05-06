@@ -20,7 +20,7 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-from src.utils.s3_config_push import parse_s3_uri
+from scripts.s3_config_push import parse_s3_uri
 
 __all__ = ["pull_s3_prefix_to_directory"]
 
@@ -66,7 +66,7 @@ def pull_s3_prefix_to_directory(uri: str, target: Path) -> None:
 def main() -> None:
     if len(sys.argv) != 3:
         print(
-            "Usage: python -m src.utils.s3_config_pull <s3_uri> <target_dir>",
+            "Usage: python -m scripts.s3_config_pull <s3_uri> <target_dir>",
             file=sys.stderr,
         )
         sys.exit(1)

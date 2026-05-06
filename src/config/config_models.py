@@ -8,7 +8,7 @@ import copy
 import json
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Union
 
 from pydantic import (
     BaseModel,
@@ -117,6 +117,22 @@ class LoadingConfig(BaseModel):
     azure_account: Optional[str] = Field(
         default=None,
         description="Azure storage account name for destination: azure_blob (Spark abfs://).",
+    )
+    output_partitions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional Spark partition count before Delta/Iceberg writes (implemented as coalesce). "
+            "Applies to append, overwrite, and merge: merge uses this on the incoming source "
+            "DataFrame only (the existing target table is unchanged). Unset preserves upstream "
+            "partitioning—for example parallel JDBC reads. When set, narrows partitions toward "
+            "this cap (coalesce never increases partition count—if the DataFrame has fewer "
+            "partitions than this value, the count stays unchanged). To run more write tasks than "
+            "the JDBC extract produced, use parallel table_read_options or an explicit Spark "
+            "repartition (shuffle), not a larger output_partitions alone. Typical output file "
+            "count follows task parallelism but is not strictly equal to this value. Raw Parquet "
+            "file loads still use a single writer partition in the object-store loader."
+        ),
     )
     merge_keys: Optional[List[str]] = Field(
         default=None,
@@ -905,14 +921,6 @@ class TableReadOptions(BaseModel):
         default=None,
         description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
     )
-    log_exact_row_count: bool = Field(
-        default=False,
-        description=(
-            "When True, run df.count() after JDBC read for exact row logging (full scan). "
-            "When False (default), that count is skipped for this resource. Also applies to "
-            "non-parallel reads unless defaults.log_full_row_count is True."
-        ),
-    )
 
     def uses_parallel_read(self) -> bool:
         """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
@@ -1026,7 +1034,12 @@ class ResourceConfig(BaseModel):
 
     database_select_query: Optional[str] = Field(
         default=None,
-        description="Optional full SQL query for extract; when set, schema/table may still be used for logging.",
+        description=(
+            "Optional SELECT for Spark JDBC extract; schema/table stay used for logging. "
+            "Use a plain SELECT statement (trailing semicolons stripped); Spine wraps it as "
+            "``(query) alias`` when needed. When set, Spark JDBC LIMIT/OFFSET pushdown is "
+            "disabled so ``LIMIT``/``OFFSET`` in the operator SQL work with nested subqueries."
+        ),
     )
     table_read_options: Optional[TableReadOptions] = Field(
         default=None,
@@ -1158,7 +1171,9 @@ class ResourceConfig(BaseModel):
         )
         out = {}
         for name, raw in v.items():
-            if not isinstance(raw, dict):
+            if isinstance(raw, RequestInputConfig):
+                out[name] = raw
+            elif not isinstance(raw, dict):
                 out[name] = {"value": raw}
             elif "value" in raw:
                 out[name] = raw
@@ -1478,6 +1493,45 @@ class SparkRuntimeConfig(BaseModel):
         default=ConnectorProvisionMode.AUTO,
         description="ABFS connector: same semantics as ``gcs_connector_mode``.",
     )
+    spark_ui_enabled: bool = Field(
+        default=False,
+        description="When true, enable Spark Web UI (for example http://127.0.0.1:4040) while the session runs.",
+    )
+    spark_ui_port: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Optional Spark UI port; omit to use Spark default (4040).",
+    )
+    spark_ui_show_console_progress: bool = Field(
+        default=False,
+        description="When true, set spark.ui.showConsoleProgress so the driver prints stage progress.",
+    )
+    spark_event_log_enabled: bool = Field(
+        default=False,
+        description="When true, write Spark event logs for History Server replay; requires spark_event_log_dir.",
+    )
+    spark_event_log_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Directory or URI for event logs (required when spark_event_log_enabled is true). "
+            "Relative paths resolve under the repository root at load time. Use durable storage on clusters."
+        ),
+    )
+    spark_event_log_compress: bool = Field(
+        default=True,
+        description="When true, compress event log files (spark.eventLog.compress).",
+    )
+
+    @model_validator(mode="after")
+    def spark_event_log_dir_required_when_enabled(self) -> "SparkRuntimeConfig":
+        if self.spark_event_log_enabled:
+            d = (self.spark_event_log_dir or "").strip()
+            if not d:
+                raise ValueError(
+                    "spark_event_log_dir is required when spark_event_log_enabled is true"
+                )
+        return self
 
 
 class DefaultsConfig(BaseModel):
@@ -1485,15 +1539,6 @@ class DefaultsConfig(BaseModel):
 
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
-    )
-    log_full_row_count: bool = Field(
-        default=False,
-        description=(
-            "When True, run Spark df.count() for exact row totals in handler summaries and "
-            "allow the same for database extracts unless overridden per-resource. When False "
-            "(default), database extracts skip full counts unless table_read_options.log_exact_row_count "
-            "is set, and the handler uses a lightweight non-empty check instead of counting all rows."
-        ),
     )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(
@@ -1531,6 +1576,14 @@ class PipelineConfig(BaseModel):
     config_root: Path = Field(
         exclude=True,
         description="Directory with defaults.yml, sources/, and queries/ (set by ConfigLoader)",
+    )
+    runtime_selection: Optional[Dict[str, Optional[Set[str]]]] = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "CLI selection passed to ConfigLoader.load_config; used so loading destinations match "
+            "ExecutionPlan when a disabled source is explicitly selected."
+        ),
     )
     version: str
     defaults: DefaultsConfig
@@ -1593,20 +1646,41 @@ class PipelineConfig(BaseModel):
 
     def get_effective_loading_destinations(self) -> set[str]:
         """
-        Return the set of enabled loading destinations used by enabled resources.
+        Return loading destinations used by resources that contribute to this config scope.
 
-        Resource loading is already merged with defaults in model initialization, so this
-        method reflects effective destination usage for the current selection scope.
+        Resource loading is merged with defaults at model initialization.
+
+        Mirrors :meth:`~src.planner.execution_plan.ExecutionPlan._should_include_source` and
+        :meth:`~src.planner.execution_plan.ExecutionPlan._should_include_resource` when
+        ``runtime_selection`` is set (CLI ``--select``):
+
+        - Explicitly selected disabled sources still contribute destinations.
+        - Whole-source selection (value ``None``) still respects per-resource ``enabled``.
+        - Explicitly selected disabled resources still contribute destinations.
         """
         destinations: set[str] = set()
-        for source in self.sources.values():
+        sel = self.runtime_selection
+        for source_name, source in self.sources.items():
             if not source.enabled:
-                continue
-            for resource in source.resources.values():
-                if not resource.enabled or resource.loading is None:
+                if sel is None or source_name not in sel:
                     continue
-                if resource.loading.enabled:
-                    destinations.add(resource.loading.destination)
+            selected_resources = sel.get(source_name) if sel and source_name in sel else None
+
+            for resource_name, resource in source.resources.items():
+                if sel is not None and selected_resources is not None:
+                    if resource_name not in selected_resources:
+                        continue
+
+                if resource.loading is None or not resource.loading.enabled:
+                    continue
+
+                if not resource.enabled:
+                    if sel is None:
+                        continue
+                    if selected_resources is None:
+                        continue
+
+                destinations.add(resource.loading.destination)
         return destinations
 
 

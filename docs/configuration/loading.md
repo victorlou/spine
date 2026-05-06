@@ -8,17 +8,20 @@
   - [Azure Blob Storage (ABFS)](#azure-blob-storage-abfs)
   - [Local filesystem](#local-filesystem)
   - [Other object stores](#other-object-stores)
-- [Delta Save Modes](#delta-save-modes)
+- [Table formats and write modes](#table-formats-and-write-modes)
+  - [Writer partitioning (`output_partitions`)](#writer-partitioning-output_partitions)
+  - [Delta Lake](#delta-lake)
   - [Overwrite](#overwrite)
   - [Append](#append)
   - [Merge (Upsert)](#merge-upsert)
-- [Iceberg](#iceberg)
+  - [Iceberg](#iceberg)
   - [Append](#append-1)
   - [Overwrite](#overwrite-1)
-  - [Merge (preview)](#merge-preview)
-  - [Current limitations](#current-limitations)
+  - [Merge](#merge)
+  - [Current Iceberg limitations](#current-iceberg-limitations)
 - [Quick reference](#quick-reference)
 - [Spark Runtime Readiness](#spark-runtime-readiness)
+  - [Spark UI and event logs](#spark-ui-and-event-logs-defaultsspark_runtime)
 
 ## Destinations
 
@@ -95,15 +98,38 @@ At startup validation, the **resolved** directory must already exist and be writ
 
 Spark can write to **`gs://`** or **`abfs://`** (and other schemes) when the correct Hadoop filesystem implementation and credentials are on the classpath and configured. Spine does not ship those connectors; operators add jars and Spark config as usual. Path and filesystem operations go through the Hadoop `FileSystem` layer in `src/loader/object_store.py`.
 
-## Delta Save Modes
+## Table formats and write modes
 
-When using Delta format, control how data is written with the `write_mode` option. Schema evolution is automatically enabled for all modes.
+Table formats are handled by load strategies under `src/load_strategy/`. `ObjectStoreLoader` prepares the Spark DataFrame and resolves the object-store base URI, then delegates Delta and Iceberg table behavior to the matching strategy. The shared strategy layer owns write-mode routing, so table formats behave consistently for `append`, `overwrite`, and `merge`.
 
-**Available modes**: `overwrite` (default), `append`, `merge`
+**Available table formats**: `delta` (default), `iceberg`
+
+**Available table write modes**: `overwrite` (default), `append`, `merge`
+
+For `merge`, `merge_keys` is required and supports composite keys. If the target table does not exist yet, Spine creates it with an append-style write before later runs perform format-specific merge operations.
+
+### Writer partitioning (`output_partitions`)
+
+Optional **`loading.output_partitions`** (positive integer) controls whether Spine **`coalesce`**s the DataFrame immediately **before** Delta or Iceberg **append**, **overwrite**, or **merge** (on the **source** batch only—the existing merge target is not repartitioned):
+
+- **Unset (recommended for large JDBC extracts)** — the DataFrame keeps whatever partitioning it already has (for example one partition per parallel JDBC read when **`table_read_options`** range or predicate mode is configured). Writes stay spread across executors; typical Parquet file count follows Spark task layout and is not fixed by Spine.
+- **Set** — Spine calls **`coalesce(output_partitions)`**, which **only reduces or preserves** partition count (it never increases parallelism). Use **`1`** when you intentionally want a narrow writer after ingest. If the upstream DataFrame already has fewer partitions than this value, Spark leaves the partition count unchanged (setting **`8`** does not create eight partitions from a single-partition extract—fix parallel JDBC **`table_read_options`** or use Spark **`repartition`** if you truly need more partitions and accept the shuffle cost).
+
+The initial **merge** run when the table does not exist still uses an append-style **`write_simple`**, which applies the same rule; subsequent merges apply **`output_partitions`** to the incoming batch before **`MERGE`**.
+
+**Parquet file writes** (non-table `format`, file-based path in `ObjectStoreLoader`) still apply an internal **`coalesce(1)`** before `save`; use Delta or Iceberg when you need multi-partition writes from config.
+
+See also [Spark JDBC read tuning](overview.md#spark-jdbc-read-tuning-database-resources) in the configuration overview.
+
+### Delta Lake
+
+Delta is path-backed in Spine. The resolved table location is the Spark write and merge target, and table existence is checked by looking for the `_delta_log` directory under that location. Delta append/overwrite writes use Spark path writes with `format: "delta"` and schema merge enabled.
+
+Delta merge uses the Delta Lake `DeltaTable.forPath(...)` API. That requires the `delta-spark` Python package and Spark Delta Lake runtime support. Spine imports the Python Delta API lazily when merge is used, so non-Delta and non-merge imports do not fail just because the optional Python API is unavailable.
 
 ### Overwrite
 
-Replace all existing data in the table.
+Replace all existing data in the Delta table.
 
 ```yaml
 loading:
@@ -129,7 +155,7 @@ loading:
 
 ### Merge (Upsert)
 
-Update existing rows and insert new ones based on primary keys.
+Update existing rows and insert new ones based on the configured merge keys.
 
 ```yaml
 loading:
@@ -141,17 +167,13 @@ loading:
   prefix: "source/resource"
 ```
 
-**Notes**
-
-- `merge_keys` is required for merge mode (list of column names)
-- Supports composite keys (multiple columns)
-- Tables are created automatically if they don't exist
-
 ## Iceberg
 
-When using Iceberg format, Spine writes through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, and for local writes it is rooted at the configured `storage_root`. Spine first resolves the final table path from that warehouse root plus the configured `prefix`, then removes the warehouse root from the resolved path and converts the remaining path into a catalog table identifier by replacing `/` with `.` and prefixing it with `iceberg.`. For example, if the warehouse root is `s3a://my-bucket` and the resolved table path is `a://my-bucket/source/resource`, Spine derives the catalog table identifier `iceberg.source.resource`.
+Iceberg is catalog-backed in Spine. The resolved table location still determines where table data and metadata live, but Spark writes and merges go through the configured `iceberg` Spark catalog. The warehouse root depends on the destination: for S3 writes it is rooted at `s3a://<bucket-name>`, for GCS at `gs://<bucket-name>`, for Azure Blob at `abfs://<container>@<account>.dfs.core.windows.net`, and for local writes at the resolved `storage_root` `file://` URI.
 
-**Available modes**: `overwrite`, `append`, `merge`
+Spine resolves the final table location from the warehouse root plus the configured `prefix`, removes the warehouse root from that location, and converts the remaining path into a quoted catalog table identifier. For example, if the warehouse root is `s3a://my-bucket` and the resolved table location is `s3a://my-bucket/source/resource/`, Spine derives the catalog table identifier ``iceberg.`source`.`resource```.
+
+Iceberg table existence is checked through the Spark catalog using that derived table identifier, not by looking directly for metadata files in object storage.
 
 ### Append
 
@@ -179,7 +201,7 @@ loading:
   prefix: "source/resource"
 ```
 
-### Merge (preview)
+### Merge
 
 Merge mode performs an Iceberg `MERGE INTO` using the configured `merge_keys`. If the table does not exist yet, Spine creates it first and later runs merges against the catalog table.
 
@@ -193,15 +215,14 @@ loading:
   prefix: "source/resource"
 ```
 
-### Current limitations
+### Current Iceberg limitations
 
-Iceberg support is still in an early merge-support phase. Plan around the following current behavior:
+Plan around the following current Iceberg behavior:
 
 - `merge_keys` is required for Iceberg merge mode
 - Merge updates only columns present in both the source data and the existing target table
 - Merge inserts are shaped to the current target schema; target-only columns are filled with typed `NULL`
 - The current merge path does not auto-evolve the target schema before `MERGE INTO`; if the source introduces new columns, use append/overwrite first or evolve the table separately
-- Iceberg table existence is currently detected from filesystem metadata under the resolved table path
 
 ## Quick reference
 
@@ -213,7 +234,7 @@ Iceberg support is still in an early merge-support phase. Plan around the follow
 | `local` | `storage_root`, `prefix` | `storage_root` may be absolute, or **relative to the repository root** (directory containing `src/`). Relative values are resolved when the config is loaded. |
 | *(omitted `defaults.loading`)* | *(built-in default)* | Same as **`local`** with **`storage_root: ".spine/local-output"`** (resolved under the repository root) and **`prefix: "default/output"`**; override per resource or in **`defaults.yml`**. |
 
-For table formats, `format: "delta"` and `format: "iceberg"` both use the `source/resource`-style prefix directly as the table location. For Iceberg, Spine resolves the final table path under the destination-specific warehouse root (`s3://<bucket-name>` for S3, `storage_root` for local), removes that warehouse root, and converts the remaining path into the catalog table name by replacing `/` with `.` and prefixing it with `iceberg.`.
+For table formats, `format: "delta"` and `format: "iceberg"` both resolve the table location from the destination base URI plus the `source/resource`-style prefix. Delta uses that location directly for path-backed writes and merges. Iceberg uses that location for storage, then derives a catalog table identifier by removing the destination-specific warehouse root (`s3a://<bucket-name>` for S3, `gs://<bucket-name>` for GCS, `abfs://...` for Azure Blob, or the resolved local `file://` URI) and quoting the remaining path parts under the `iceberg` catalog.
 
 Filesystem helpers for loaders live under **`src/loader/`** (for example `object_store.py`, `local_storage.py`).
 
@@ -229,6 +250,21 @@ Spine composes Spark connector packages and Hadoop filesystem settings from the 
 | `azure_blob` (`blob`/`azure`) | `azure_container` (or `bucket` alias), `azure_account`, `prefix` | ABFS connector + `fs.abfs.*` implementation | runtime-provided Azure storage auth |
 
 **Configuration-first:** set `defaults.spark_runtime.profile` (`auto`, `local_dev`, or `cluster_managed`) and `s3_connector_mode` / `gcs_connector_mode` / `azure_connector_mode` (`auto`, `packages`, or `external`). With `auto`, Spine inspects the process environment: on Databricks and EMR, all three default to `external` (connectors expected on the cluster); elsewhere they default to `packages` (Ivy for Delta/S3/Azure connectors; GCS uses the shaded connector JAR on `spark.jars`). S3A endpoint **region** is not part of `spark_runtime`; it follows the AWS credential chain and standard AWS environment variables.
+
+### Spark UI and event logs (`defaults.spark_runtime`)
+
+All of the following default to **off** so CI and unattended runs stay quiet.
+
+| YAML field | Spark keys | Notes |
+|------------|------------|--------|
+| `spark_ui_enabled` | `spark.ui.enabled` | When `true`, the Spark Web UI is available for the lifetime of the session (for example `http://127.0.0.1:4040` for local driver-hosted Spark). On **no** managed platform (laptop / default IAM + S3), Spine sets **`spark.driver.host`** / **`spark.driver.bindAddress`** to **`127.0.0.1`** and **temporarily removes `SPARK_LOCAL_IP`** from the process environment around **`SparkSession.getOrCreate()`**, because the JVM still reads that variable for UI bind addresses even when SparkConf lists loopback. |
+| `spark_ui_port` | `spark.ui.port` | Optional; omit to use Spark default (4040). |
+| `spark_ui_show_console_progress` | `spark.ui.showConsoleProgress` | When `true`, prints stage progress in the driver console and aligns `PYSPARK_SUBMIT_ARGS`. |
+| `spark_event_log_enabled` | `spark.eventLog.enabled` | When `true`, requires `spark_event_log_dir`. Writes Spark event logs for **Spark History Server** replay; Spine does not start History Server. |
+| `spark_event_log_dir` | `spark.eventLog.dir` | Filesystem path or URI (`file:`, `s3a:`, …). Relative paths resolve under the **repository root** (same anchor as `storage_root` for local loading). |
+| `spark_event_log_compress` | `spark.eventLog.compress` | Default `true` to limit log size. |
+
+**Practical guidance:** use **`spark_ui_enabled: true`** for interactive profiling of large JDBC or merge jobs. Use **event logging** when you will point **Spark History Server** at `spark_event_log_dir` (or your platform’s equivalent) or copy logs to durable analysis storage. On **Databricks / EMR**, prefer the platform Spark UI; avoid writing event logs only to ephemeral driver-local disk unless you understand retention.
 
 **Optional environment overrides** (same semantics as YAML when set): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (defaults to the official shaded `gcs-connector` JAR on Maven Central when mode is `packages`), `SPARK_AZURE_CONNECTOR_MODE`, `SPINE_GCS_AUTH_TYPE` (defaults to `APPLICATION_DEFAULT`; set `COMPUTE_ENGINE` only when you intentionally rely on GCE metadata). Use these when CI or a container image cannot carry pipeline YAML changes.
 

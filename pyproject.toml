@@ -61,7 +61,7 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "-ra",
-    "--durations=5",
+    "--durations=10",
 ]
 xfail_strict = true
 filterwarnings = [

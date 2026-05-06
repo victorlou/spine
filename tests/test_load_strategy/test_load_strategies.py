@@ -172,10 +172,73 @@ def test_base_strategy_rejects_unsupported_write_mode() -> None:
         strategy.write(MagicMock())
 
 
+def test_optimize_dataframe_returns_df_unchanged_when_output_partitions_unset() -> None:
+    strategy = _strategy(_config())
+    df = MagicMock()
+
+    result = strategy._optimize_dataframe(df)
+
+    assert result is df
+    df.coalesce.assert_not_called()
+
+
+def test_optimize_dataframe_coalesces_when_output_partitions_set() -> None:
+    strategy = _strategy(_config(output_partitions=1))
+    coalesced = MagicMock()
+    df = MagicMock()
+    df.coalesce.return_value = coalesced
+
+    result = strategy._optimize_dataframe(df)
+
+    df.coalesce.assert_called_once_with(1)
+    assert result is coalesced
+
+
+def test_optimize_dataframe_coalesces_to_requested_partition_count() -> None:
+    strategy = _strategy(_config(output_partitions=4))
+    df = MagicMock()
+    df.coalesce.return_value = df
+
+    strategy._optimize_dataframe(df)
+
+    df.coalesce.assert_called_once_with(4)
+
+
+def test_optimize_dataframe_for_write_warns_when_coalesce_cannot_increase() -> None:
+    strategy = _strategy(_config(output_partitions=8))
+    df = MagicMock()
+    df.rdd.getNumPartitions.return_value = 1
+    optimized = MagicMock()
+    optimized.rdd.getNumPartitions.return_value = 1
+    df.coalesce.return_value = optimized
+
+    with patch.object(strategy.logger, "warning") as warn_mock:
+        result = strategy._optimize_dataframe_for_write(df)
+
+    warn_mock.assert_called_once()
+    assert result is optimized
+
+
+def test_optimize_dataframe_for_write_no_warn_when_reducing_partitions() -> None:
+    strategy = _strategy(_config(output_partitions=2))
+    df = MagicMock()
+    df.rdd.getNumPartitions.return_value = 8
+    optimized = MagicMock()
+    optimized.rdd.getNumPartitions.return_value = 2
+    df.coalesce.return_value = optimized
+
+    with patch.object(strategy.logger, "warning") as warn_mock:
+        result = strategy._optimize_dataframe_for_write(df)
+
+    warn_mock.assert_not_called()
+    assert result is optimized
+
+
 def _df_with_writer(columns=None):
     df = MagicMock()
     df.columns = columns or ["id", "name"]
     df.coalesce.return_value = df
+    df.rdd.getNumPartitions.return_value = 1
     writer = MagicMock()
     writer.format.return_value = writer
     writer.mode.return_value = writer
@@ -194,14 +257,16 @@ def test_delta_table_exists_checks_delta_log_directory() -> None:
 
 
 def test_delta_write_simple_saves_to_table_location() -> None:
+    spark = MagicMock()
     df, writer = _df_with_writer()
-    strategy = DeltaStrategy(MagicMock(), _object_store(), "s3a://bucket", _config(), None)
+    strategy = DeltaStrategy(spark, _object_store(), "s3a://bucket", _config(), None)
 
     strategy.write_simple(df, "s3a://bucket/source/resource/", mode="overwrite")
 
     writer.format.assert_called_once_with(LoadingFormat.DELTA)
     writer.mode.assert_called_once_with("overwrite")
     writer.save.assert_called_once_with("s3a://bucket/source/resource/")
+    spark.sparkContext.setJobDescription.assert_called()
 
 
 def test_delta_merge_validates_source_merge_keys_before_delta_lookup() -> None:
@@ -241,6 +306,7 @@ def test_delta_merge_builds_case_insensitive_update_and_insert_maps() -> None:
     with patch("src.load_strategy.delta_strategy._get_delta_table", return_value=delta_cls):
         strategy.perform_merge(df, "s3a://bucket/source/resource/", ["id"])
 
+    df.coalesce.assert_not_called()
     delta_table.alias.return_value.merge.assert_called_once()
     merge_builder.whenMatchedUpdate.assert_called_once_with(set={"name": "updates.`Name`"})
     merge_builder.whenNotMatchedInsert.assert_called_once()
@@ -249,6 +315,37 @@ def test_delta_merge_builds_case_insensitive_update_and_insert_maps() -> None:
     assert insert_values["name"] == "updates.`Name`"
     assert insert_values["target_only"] == "CAST(NULL AS string)"
     merge_builder.execute.assert_called_once()
+
+
+def test_delta_merge_applies_output_partitions_to_source() -> None:
+    df, _writer = _df_with_writer(columns=["Id", "Name"])
+    target_df = MagicMock()
+    id_field = MagicMock(name="id_field")
+    id_field.name = "id"
+    id_field.dataType.simpleString.return_value = "int"
+    name_field = MagicMock(name="name_field")
+    name_field.name = "name"
+    name_field.dataType.simpleString.return_value = "string"
+    target_df.schema.fields = [id_field, name_field]
+
+    delta_table = MagicMock()
+    delta_table.toDF.return_value = target_df
+    merge_builder = MagicMock()
+    merge_builder.whenMatchedUpdate.return_value = merge_builder
+    merge_builder.whenNotMatchedInsert.return_value = merge_builder
+    delta_table.alias.return_value.merge.return_value = merge_builder
+
+    strategy = DeltaStrategy(
+        MagicMock(), _object_store(), "s3a://bucket", _config(output_partitions=4), None
+    )
+
+    delta_cls = MagicMock()
+    delta_cls.forPath.return_value = delta_table
+
+    with patch("src.load_strategy.delta_strategy._get_delta_table", return_value=delta_cls):
+        strategy.perform_merge(df, "s3a://bucket/source/resource/", ["id"])
+
+    df.coalesce.assert_called_once_with(4)
 
 
 def test_iceberg_identifier_is_derived_from_warehouse_relative_location() -> None:
@@ -287,6 +384,7 @@ def test_iceberg_write_simple_saves_as_catalog_table_and_cleans_conf() -> None:
     writer.format.assert_called_once_with(LoadingFormat.ICEBERG)
     writer.mode.assert_called_once_with("append")
     writer.saveAsTable.assert_called_once_with("iceberg.`source`.`resource`")
+    spark.sparkContext.setJobDescription.assert_called()
     spark.conf.unset.assert_called_once_with("spark.sql.catalog.iceberg.warehouse")
 
 
@@ -310,6 +408,7 @@ def test_iceberg_merge_builds_sql_and_drops_temp_view() -> None:
 
     strategy.perform_merge(df, "file:///warehouse/source/resource/", ["id"])
 
+    df.coalesce.assert_not_called()
     df.createOrReplaceTempView.assert_called_once()
     sql = spark.sql.call_args.args[0]
     assert "MERGE INTO iceberg.`source`.`resource` AS target" in sql
@@ -326,3 +425,26 @@ def test_iceberg_merge_validates_source_merge_keys() -> None:
 
     with pytest.raises(LoaderError, match="Merge keys not found in DataFrame"):
         strategy.perform_merge(df, "file:///warehouse/source/resource/", ["id"])
+
+
+def test_iceberg_merge_applies_output_partitions_to_source() -> None:
+    spark = MagicMock()
+    df, _writer = _df_with_writer(columns=["Id", "Name"])
+    target_df = MagicMock()
+    id_field = MagicMock(name="id_field")
+    id_field.name = "id"
+    id_field.dataType.simpleString.return_value = "int"
+    name_field = MagicMock(name="name_field")
+    name_field.name = "name"
+    name_field.dataType.simpleString.return_value = "string"
+    target_df.columns = ["id", "name"]
+    target_df.schema.fields = [id_field, name_field]
+    spark.table.return_value = target_df
+    strategy = IcebergStrategy(
+        spark, _object_store(), "file:///warehouse", _config(output_partitions=8), None
+    )
+
+    strategy.perform_merge(df, "file:///warehouse/source/resource/", ["id"])
+
+    df.coalesce.assert_called_once_with(8)
+    df.createOrReplaceTempView.assert_called_once()

@@ -9,6 +9,7 @@
   - [Local filesystem](#local-filesystem)
   - [Other object stores](#other-object-stores)
 - [Table formats and write modes](#table-formats-and-write-modes)
+  - [Writer partitioning (`output_partitions`)](#writer-partitioning-output_partitions)
   - [Delta Lake](#delta-lake)
   - [Overwrite](#overwrite)
   - [Append](#append)
@@ -20,6 +21,7 @@
   - [Current Iceberg limitations](#current-iceberg-limitations)
 - [Quick reference](#quick-reference)
 - [Spark Runtime Readiness](#spark-runtime-readiness)
+  - [Spark UI and event logs](#spark-ui-and-event-logs-defaultsspark_runtime)
 
 ## Destinations
 
@@ -105,6 +107,19 @@ Table formats are handled by load strategies under `src/load_strategy/`. `Object
 **Available table write modes**: `overwrite` (default), `append`, `merge`
 
 For `merge`, `merge_keys` is required and supports composite keys. If the target table does not exist yet, Spine creates it with an append-style write before later runs perform format-specific merge operations.
+
+### Writer partitioning (`output_partitions`)
+
+Optional **`loading.output_partitions`** (positive integer) controls whether Spine **`coalesce`**s the DataFrame immediately **before** Delta or Iceberg **append**, **overwrite**, or **merge** (on the **source** batch only—the existing merge target is not repartitioned):
+
+- **Unset (recommended for large JDBC extracts)** — the DataFrame keeps whatever partitioning it already has (for example one partition per parallel JDBC read when **`table_read_options`** range or predicate mode is configured). Writes stay spread across executors; typical Parquet file count follows Spark task layout and is not fixed by Spine.
+- **Set** — Spine calls **`coalesce(output_partitions)`**, which **only reduces or preserves** partition count (it never increases parallelism). Use **`1`** when you intentionally want a narrow writer after ingest. If the upstream DataFrame already has fewer partitions than this value, Spark leaves the partition count unchanged (setting **`8`** does not create eight partitions from a single-partition extract—fix parallel JDBC **`table_read_options`** or use Spark **`repartition`** if you truly need more partitions and accept the shuffle cost).
+
+The initial **merge** run when the table does not exist still uses an append-style **`write_simple`**, which applies the same rule; subsequent merges apply **`output_partitions`** to the incoming batch before **`MERGE`**.
+
+**Parquet file writes** (non-table `format`, file-based path in `ObjectStoreLoader`) still apply an internal **`coalesce(1)`** before `save`; use Delta or Iceberg when you need multi-partition writes from config.
+
+See also [Spark JDBC read tuning](overview.md#spark-jdbc-read-tuning-database-resources) in the configuration overview.
 
 ### Delta Lake
 
@@ -235,6 +250,21 @@ Spine composes Spark connector packages and Hadoop filesystem settings from the 
 | `azure_blob` (`blob`/`azure`) | `azure_container` (or `bucket` alias), `azure_account`, `prefix` | ABFS connector + `fs.abfs.*` implementation | runtime-provided Azure storage auth |
 
 **Configuration-first:** set `defaults.spark_runtime.profile` (`auto`, `local_dev`, or `cluster_managed`) and `s3_connector_mode` / `gcs_connector_mode` / `azure_connector_mode` (`auto`, `packages`, or `external`). With `auto`, Spine inspects the process environment: on Databricks and EMR, all three default to `external` (connectors expected on the cluster); elsewhere they default to `packages` (Ivy for Delta/S3/Azure connectors; GCS uses the shaded connector JAR on `spark.jars`). S3A endpoint **region** is not part of `spark_runtime`; it follows the AWS credential chain and standard AWS environment variables.
+
+### Spark UI and event logs (`defaults.spark_runtime`)
+
+All of the following default to **off** so CI and unattended runs stay quiet.
+
+| YAML field | Spark keys | Notes |
+|------------|------------|--------|
+| `spark_ui_enabled` | `spark.ui.enabled` | When `true`, the Spark Web UI is available for the lifetime of the session (for example `http://127.0.0.1:4040` for local driver-hosted Spark). On **no** managed platform (laptop / default IAM + S3), Spine sets **`spark.driver.host`** / **`spark.driver.bindAddress`** to **`127.0.0.1`** and **temporarily removes `SPARK_LOCAL_IP`** from the process environment around **`SparkSession.getOrCreate()`**, because the JVM still reads that variable for UI bind addresses even when SparkConf lists loopback. |
+| `spark_ui_port` | `spark.ui.port` | Optional; omit to use Spark default (4040). |
+| `spark_ui_show_console_progress` | `spark.ui.showConsoleProgress` | When `true`, prints stage progress in the driver console and aligns `PYSPARK_SUBMIT_ARGS`. |
+| `spark_event_log_enabled` | `spark.eventLog.enabled` | When `true`, requires `spark_event_log_dir`. Writes Spark event logs for **Spark History Server** replay; Spine does not start History Server. |
+| `spark_event_log_dir` | `spark.eventLog.dir` | Filesystem path or URI (`file:`, `s3a:`, …). Relative paths resolve under the **repository root** (same anchor as `storage_root` for local loading). |
+| `spark_event_log_compress` | `spark.eventLog.compress` | Default `true` to limit log size. |
+
+**Practical guidance:** use **`spark_ui_enabled: true`** for interactive profiling of large JDBC or merge jobs. Use **event logging** when you will point **Spark History Server** at `spark_event_log_dir` (or your platform’s equivalent) or copy logs to durable analysis storage. On **Databricks / EMR**, prefer the platform Spark UI; avoid writing event logs only to ephemeral driver-local disk unless you understand retention.
 
 **Optional environment overrides** (same semantics as YAML when set): `SPARK_S3_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_MODE`, `SPARK_GCS_CONNECTOR_JAR_URL` (defaults to the official shaded `gcs-connector` JAR on Maven Central when mode is `packages`), `SPARK_AZURE_CONNECTOR_MODE`, `SPINE_GCS_AUTH_TYPE` (defaults to `APPLICATION_DEFAULT`; set `COMPUTE_ENGINE` only when you intentionally rely on GCE metadata). Use these when CI or a container image cannot carry pipeline YAML changes.
 

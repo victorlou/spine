@@ -76,20 +76,23 @@ sources:
 
 ### Spark JDBC read tuning (database resources)
 
-Optional **`table_read_options`** describes **Spark `DataFrameReader.jdbc`** options: parallel range reads, predicate lists, JDBC `fetchSize`, and whether to run an exact `count()` after the read for logs. **PostgreSQL** and **HANA** both read through Spark JDBC in this repository, so the same block is honored for those `type` values. Future relational source types may reject the block until they use the same Spark read path.
+Optional **`table_read_options`** describes **Spark `DataFrameReader.jdbc`** options: parallel range reads, predicate lists, and JDBC `fetchSize`. **PostgreSQL** and **HANA** both read through Spark JDBC in this repository, so the same block is honored for those `type` values. Future relational source types may reject the block until they use the same Spark read path.
 
-- **`fetch_size`**: optional JDBC `fetchSize` hint (positive integer) in Spark connection properties when the backend uses Spark JDBC.
-- **Range partitioning** (mutually exclusive with `predicates`): **`partition_column`**, **`lower_bound`**, **`upper_bound`**, **`num_partitions`**. Bounds are **operator-supplied** (Spine does not infer min/max). The column must suit Spark’s JDBC partitioner (typically an integer key).
-- **`predicates`**: non-empty list of `WHERE` fragments for predicate-based JDBC reads. Do not combine with range mode fields.
-- **`log_exact_row_count`**: when `true`, run `df.count()` after the JDBC read for exact logging (extra scan). When `false` (default), that count is skipped unless **`defaults.log_full_row_count`** is `true` in `defaults.yml`.
+**`fetch_size` vs parallel reads**
+
+- **`fetch_size`**: JDBC **`fetchSize`** hint passed through Spark connection properties (`fetchsize`). It controls **how many rows the driver requests per fetch** for each Spark task’s cursor: fewer round-trips to the database and often smoother **per-task** read behavior. It does **not** add Spark partitions, cap total rows read, or guarantee freedom from out-of-memory failures. Large extracts still need adequate Spark executor memory and storage, avoiding unnecessary full scans for logging, and (when needed) parallel JDBC reads below.
+- **Range partitioning** (mutually exclusive with `predicates`): **`partition_column`**, **`lower_bound`**, **`upper_bound`**, **`num_partitions`**. This splits the read into **multiple JDBC queries** (one per partition range), so Spark can run **parallel tasks** across executors. Bounds are **operator-supplied** (Spine does not infer min/max). The column must suit Spark’s JDBC partitioner (typically an integer key). Without range mode or predicates, the extract uses a **single** JDBC partition regardless of `fetch_size`; write parallelism later follows that upstream partition count unless you set **`loading.output_partitions`** (see [Loading](loading.md)).
+- **`predicates`**: non-empty list of `WHERE` fragments for predicate-based JDBC reads (parallel tasks per predicate). Do not combine with range mode fields.
+
+At extract time the pipeline logs **`JDBC extract plan`** (read mode, predicate or range parameters, optional **`fetch_size`**) and **`spark_partitions`** from the lazy Spark plan so you can confirm the JDBC call shape without opening the Spark UI. **`take(1)`** for non-empty checks uses only one task and does not validate parallel reads; bulk write parallelism follows upstream partitions unless **`loading.output_partitions`** coalesces downward—see [Loading — Writer partitioning](loading.md#writer-partitioning-output_partitions).
 
 Future JDBC-backed sources (for example MySQL or Redshift) can reuse this block once they use the same Spark read path. See commented examples in [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml).
 
-### Default loading and row counts
+### Default loading
 
 - **`defaults.loading`** is merged into every resource that does not define its own `loading` block (and `loading: null` in YAML is treated the same as omitted: inherit defaults). For object-store destinations (**`local`**, **`s3`**, **`gcs`**, **`azure_blob`**), if **`prefix`** is omitted, the handler sets **`{source_name}/{resource_name}`** before writing. Table formats (**`delta`**, **`iceberg`**) use that resolved prefix as the table location; Iceberg additionally derives a Spark catalog table identifier from the location.
+- **`loading.output_partitions`** (optional): for **Delta and Iceberg**, narrows the **incoming** DataFrame to this many Spark partitions with **`coalesce`** before **append**, **overwrite**, or **merge** (merge: source batch only). **Omit** for large extracts so partition count follows the JDBC read (for example parallel **`table_read_options`**). Non-table Parquet writes through the object-store loader still use a single output partition. Details: [Loading — Writer partitioning](loading.md#writer-partitioning-output_partitions).
 - **`loading.enabled`**: after merging defaults, set **`enabled: false`** on a resource to skip loader writes for that resource only.
-- **`defaults.log_full_row_count`**: when **`true`**, the handler runs a full Spark **`df.count()`** for result summaries and enables the same global behavior for database extracts unless a resource opts in with **`table_read_options.log_exact_row_count`**. When **`false`** (default), the handler uses a lightweight non-empty check instead of a full count, and database extracts skip **`df.count()`** unless **`table_read_options.log_exact_row_count`** is **`true`** for that resource.
 
 ### Database resources and request contexts
 

@@ -1,5 +1,7 @@
 """Tests for SparkManager AWS startup decoupling."""
 
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -8,7 +10,7 @@ import pytest
 from src.config.config_models import SparkRuntimeConfig
 from src.config.spark_runtime import resolve_spark_runtime
 from src.utils.exceptions import AWSError, SparkError
-from src.utils.spark_manager import SparkManager
+from src.utils.spark_manager import SparkManager, _ensure_local_spark_event_log_dir
 
 
 def test_spark_manager_construction_does_not_eagerly_load_aws_credentials(monkeypatch) -> None:
@@ -151,6 +153,61 @@ def test_resolve_spark_runtime_falls_back_to_settings(monkeypatch: pytest.Monkey
         lambda _cfg: resolved,
     )
     assert mgr._resolve_spark_runtime(None) is resolved
+
+
+def test_ensure_local_spark_event_log_dir_creates_file_uri_path(tmp_path: Path) -> None:
+    log_dir = tmp_path / "nested" / "spark_events"
+    uri = log_dir.as_uri()
+    cfgs = {"spark.eventLog.enabled": "true", "spark.eventLog.dir": uri}
+    _ensure_local_spark_event_log_dir(cfgs, MagicMock())
+    assert log_dir.is_dir()
+
+
+def test_ensure_local_spark_event_log_dir_skips_when_disabled(tmp_path: Path) -> None:
+    log_dir = tmp_path / "no_create"
+    uri = log_dir.as_uri()
+    cfgs = {"spark.eventLog.enabled": "false", "spark.eventLog.dir": uri}
+    _ensure_local_spark_event_log_dir(cfgs, MagicMock())
+    assert not log_dir.exists()
+
+
+def test_init_session_clears_spark_local_ip_while_creating_session_when_ui_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SPARK_LOCAL_IP", "10.0.0.5")
+    manager = SparkManager()
+    manager._spark = None
+
+    monkeypatch.setattr(manager, "_load_credentials", lambda: None)
+    monkeypatch.setattr(
+        "src.utils.spark_manager.SparkSessionConf.get_java_options", lambda *_: None
+    )
+    monkeypatch.setattr("src.utils.spark_manager.atexit.register", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "src.utils.spark_manager.SparkSessionConf.get_configs_for_destinations", lambda **_: {}
+    )
+    monkeypatch.setattr(
+        "src.utils.spark_manager.SparkSessionConf.startup_summary", lambda **_: "sum"
+    )
+
+    seen_during_create: dict[str, bool] = {"cleared": False}
+
+    class _FakeBuilder:
+        def config(self, key, value):
+            return self
+
+        def getOrCreate(self):
+            seen_during_create["cleared"] = "SPARK_LOCAL_IP" not in os.environ
+            return SimpleNamespace(stop=lambda: None)
+
+    monkeypatch.setattr(
+        "src.utils.spark_manager.SparkSession", SimpleNamespace(builder=_FakeBuilder())
+    )
+
+    rt = resolve_spark_runtime(SparkRuntimeConfig(spark_ui_enabled=True))
+    manager.init_session(destinations={"local"}, spark_runtime=rt)
+    assert seen_during_create["cleared"] is True
+    assert os.environ.get("SPARK_LOCAL_IP") == "10.0.0.5"
 
 
 def test_init_session_applies_multiple_builder_configs(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,13 +9,17 @@ from src.config.config_models import SourceType, TableReadOptions
 from src.service.hana_service import HanaService
 from src.service.postgres_service import PostgresService
 from src.service.service_factory import ServiceFactory
-from src.service.sql_database_service import SqlDatabaseService, jdbc_table_option_from_custom_sql
+from src.service.sql_database_service import (
+    SqlDatabaseService,
+    jdbc_read_mode_label,
+    jdbc_table_option_from_custom_sql,
+)
 from src.utils.exceptions import ServiceError
 
 
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
-        pipeline_config=SimpleNamespace(defaults=SimpleNamespace(log_full_row_count=False)),
+        pipeline_config=SimpleNamespace(defaults=SimpleNamespace()),
         api=SimpleNamespace(TIMEOUT=5),
     )
 
@@ -83,7 +87,9 @@ def test_sql_database_service_guard_rails() -> None:
         def _load_dataframe(
             self, spark_session, schema, table, select_query, table_read_options=None
         ):
-            return MagicMock(count=lambda: 1)
+            df = MagicMock()
+            df.rdd.getNumPartitions.return_value = 1
+            return df
 
         def connect(self) -> None:
             return None
@@ -154,6 +160,23 @@ def test_jdbc_table_option_from_custom_sql_rejects_empty() -> None:
         jdbc_table_option_from_custom_sql("   ;  ")
 
 
+def test_jdbc_read_mode_label() -> None:
+    assert jdbc_read_mode_label(None) == "single_table"
+    assert jdbc_read_mode_label(TableReadOptions(predicates=["x=1"])) == "predicates"
+    assert (
+        jdbc_read_mode_label(
+            TableReadOptions(
+                partition_column="id",
+                lower_bound=1,
+                upper_bound=10,
+                num_partitions=2,
+            )
+        )
+        == "partition_range"
+    )
+    assert jdbc_read_mode_label(TableReadOptions(fetch_size=5000)) == "single_table"
+
+
 def test_hana_table_label_and_from_clause() -> None:
     hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
     assert hana._table_label_for_log("public", "users") == '"public"."users"'
@@ -209,7 +232,9 @@ def test_sql_extract_table_ensure_prerequisites_hook_runs() -> None:
         def _load_dataframe(
             self, spark_session, schema, table, select_query, table_read_options=None
         ):
-            return MagicMock(count=lambda: 1)
+            df = MagicMock()
+            df.rdd.getNumPartitions.return_value = 1
+            return df
 
         def _ensure_extract_prerequisites(self) -> None:
             self.ensured = True
@@ -246,7 +271,7 @@ def test_sql_extract_table_raises_service_error_on_loader_exception() -> None:
         svc.extract_table("public", "users", spark_session=MagicMock())
 
 
-def test_sql_extract_table_logs_without_count_when_disabled() -> None:
+def test_sql_extract_table_never_calls_count_for_logging() -> None:
     class _Stub(SqlDatabaseService):
         def _table_label_for_log(self, schema: str, table: str) -> str:
             return f"{schema}.{table}"
@@ -254,7 +279,10 @@ def test_sql_extract_table_logs_without_count_when_disabled() -> None:
         def _load_dataframe(
             self, spark_session, schema, table, select_query, table_read_options=None
         ):
-            return MagicMock(count=MagicMock(return_value=99))
+            df = MagicMock()
+            df.rdd.getNumPartitions.return_value = 1
+            df.count = MagicMock(return_value=99)
+            return df
 
         def connect(self) -> None:
             return None
@@ -265,33 +293,4 @@ def test_sql_extract_table_logs_without_count_when_disabled() -> None:
     svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
     df = svc.extract_table("public", "users", spark_session=MagicMock())
     df.count.assert_not_called()
-
-
-def test_sql_extract_table_logs_exact_count_when_requested() -> None:
-    class _Stub(SqlDatabaseService):
-        def _table_label_for_log(self, schema: str, table: str) -> str:
-            return f"{schema}.{table}"
-
-        def _load_dataframe(
-            self, spark_session, schema, table, select_query, table_read_options=None
-        ):
-            return MagicMock(count=MagicMock(return_value=7))
-
-        def connect(self) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    svc = _Stub(_settings(), "s", _source("postgresql"), redis_context=object())
-    read_opts = SimpleNamespace(
-        fetch_size=1000,
-        predicates=["id > 1"],
-        partition_column="id",
-        num_partitions=2,
-        log_exact_row_count=True,
-    )
-    df = svc.extract_table(
-        "public", "users", spark_session=MagicMock(), table_read_options=read_opts
-    )
-    df.count.assert_called_once()
+    assert df.rdd.getNumPartitions.call_count >= 1

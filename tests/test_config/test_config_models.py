@@ -27,6 +27,7 @@ from src.config.config_models import (
     SnapshotConfig,
     SourceConfig,
     SourceType,
+    SparkRuntimeConfig,
     StreamingConfig,
     TableReadOptions,
     is_database_source_type,
@@ -488,6 +489,26 @@ def test_loading_config_merge_mode_requires_nonempty_merge_keys(merge_keys) -> N
 
 
 # ---------------------------------------------------------------------------
+# LoadingConfig — output_partitions validation
+# ---------------------------------------------------------------------------
+
+
+def test_loading_config_output_partitions_defaults_to_none() -> None:
+    cfg = LoadingConfig(destination="local", storage_root="/tmp")
+    assert cfg.output_partitions is None
+
+
+def test_loading_config_output_partitions_accepts_valid_value() -> None:
+    cfg = LoadingConfig(destination="local", storage_root="/tmp", output_partitions=8)
+    assert cfg.output_partitions == 8
+
+
+def test_loading_config_output_partitions_rejects_zero() -> None:
+    with pytest.raises(ValidationError, match="output_partitions"):
+        LoadingConfig(destination="local", storage_root="/tmp", output_partitions=0)
+
+
+# ---------------------------------------------------------------------------
 # LoadingConfig.destination_dedup_key and destination_details
 # ---------------------------------------------------------------------------
 
@@ -944,3 +965,14 @@ def test_source_config_snapshot_on_non_rest_api_raises() -> None:
                 )
             },
         )
+
+
+def test_spark_runtime_event_log_requires_dir() -> None:
+    with pytest.raises(ValidationError, match="spark_event_log_dir"):
+        SparkRuntimeConfig(spark_event_log_enabled=True)
+
+
+def test_spark_runtime_event_log_accepts_dir() -> None:
+    c = SparkRuntimeConfig(spark_event_log_enabled=True, spark_event_log_dir="/tmp/spark-events")
+    assert c.spark_event_log_enabled is True
+    assert c.spark_event_log_dir == "/tmp/spark-events"

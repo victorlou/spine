@@ -6,6 +6,7 @@ from src.config.config_models import ConnectorProvisionMode, SparkRuntimeConfig
 from src.config.spark_runtime import (
     ManagedSparkPlatform,
     detect_managed_spark_platform,
+    normalize_spark_event_log_uri,
     resolve_spark_runtime,
 )
 
@@ -73,3 +74,30 @@ def test_explicit_yaml_s3_external_on_emr(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("EMR_CLUSTER_ID", "j-1")
     r = resolve_spark_runtime(SparkRuntimeConfig(s3_connector_mode=ConnectorProvisionMode.EXTERNAL))
     assert r.s3_connector_mode == "external"
+
+
+def test_normalize_spark_event_log_uri_preserves_s3a() -> None:
+    u = "s3a://bucket/prefix/events"
+    assert normalize_spark_event_log_uri(u) == u
+
+
+def test_resolve_spark_runtime_event_log_uri_when_enabled() -> None:
+    r = resolve_spark_runtime(
+        SparkRuntimeConfig(spark_event_log_enabled=True, spark_event_log_dir="/tmp/evt")
+    )
+    assert r.spark_event_log_dir_uri is not None
+    assert r.spark_event_log_dir_uri.startswith("file:")
+    assert r.spark_ui_enabled is False
+
+
+def test_summary_for_log_includes_ui_and_event_flags() -> None:
+    r = resolve_spark_runtime(
+        SparkRuntimeConfig(
+            spark_ui_enabled=True,
+            spark_event_log_enabled=True,
+            spark_event_log_dir="/tmp/e",
+        )
+    )
+    s = r.summary_for_log()
+    assert "spark_ui=True" in s
+    assert "spark_event_log=True" in s

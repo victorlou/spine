@@ -118,6 +118,22 @@ class LoadingConfig(BaseModel):
         default=None,
         description="Azure storage account name for destination: azure_blob (Spark abfs://).",
     )
+    output_partitions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional Spark partition count before Delta/Iceberg writes (implemented as coalesce). "
+            "Applies to append, overwrite, and merge: merge uses this on the incoming source "
+            "DataFrame only (the existing target table is unchanged). Unset preserves upstream "
+            "partitioning—for example parallel JDBC reads. When set, narrows partitions toward "
+            "this cap (coalesce never increases partition count—if the DataFrame has fewer "
+            "partitions than this value, the count stays unchanged). To run more write tasks than "
+            "the JDBC extract produced, use parallel table_read_options or an explicit Spark "
+            "repartition (shuffle), not a larger output_partitions alone. Typical output file "
+            "count follows task parallelism but is not strictly equal to this value. Raw Parquet "
+            "file loads still use a single writer partition in the object-store loader."
+        ),
+    )
     merge_keys: Optional[List[str]] = Field(
         default=None,
         description="List of column names to use as primary keys for merge operations. Required when write_mode is 'merge'.",
@@ -905,14 +921,6 @@ class TableReadOptions(BaseModel):
         default=None,
         description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
     )
-    log_exact_row_count: bool = Field(
-        default=False,
-        description=(
-            "When True, run df.count() after JDBC read for exact row logging (full scan). "
-            "When False (default), that count is skipped for this resource. Also applies to "
-            "non-parallel reads unless defaults.log_full_row_count is True."
-        ),
-    )
 
     def uses_parallel_read(self) -> bool:
         """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
@@ -1484,6 +1492,45 @@ class SparkRuntimeConfig(BaseModel):
         default=ConnectorProvisionMode.AUTO,
         description="ABFS connector: same semantics as ``gcs_connector_mode``.",
     )
+    spark_ui_enabled: bool = Field(
+        default=False,
+        description="When true, enable Spark Web UI (for example http://127.0.0.1:4040) while the session runs.",
+    )
+    spark_ui_port: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Optional Spark UI port; omit to use Spark default (4040).",
+    )
+    spark_ui_show_console_progress: bool = Field(
+        default=False,
+        description="When true, set spark.ui.showConsoleProgress so the driver prints stage progress.",
+    )
+    spark_event_log_enabled: bool = Field(
+        default=False,
+        description="When true, write Spark event logs for History Server replay; requires spark_event_log_dir.",
+    )
+    spark_event_log_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Directory or URI for event logs (required when spark_event_log_enabled is true). "
+            "Relative paths resolve under the repository root at load time. Use durable storage on clusters."
+        ),
+    )
+    spark_event_log_compress: bool = Field(
+        default=True,
+        description="When true, compress event log files (spark.eventLog.compress).",
+    )
+
+    @model_validator(mode="after")
+    def spark_event_log_dir_required_when_enabled(self) -> "SparkRuntimeConfig":
+        if self.spark_event_log_enabled:
+            d = (self.spark_event_log_dir or "").strip()
+            if not d:
+                raise ValueError(
+                    "spark_event_log_dir is required when spark_event_log_enabled is true"
+                )
+        return self
 
 
 class DefaultsConfig(BaseModel):
@@ -1491,15 +1538,6 @@ class DefaultsConfig(BaseModel):
 
     retry: RetryConfig = Field(
         default_factory=RetryConfig, description="Default retry configuration"
-    )
-    log_full_row_count: bool = Field(
-        default=False,
-        description=(
-            "When True, run Spark df.count() for exact row totals in handler summaries and "
-            "allow the same for database extracts unless overridden per-resource. When False "
-            "(default), database extracts skip full counts unless table_read_options.log_exact_row_count "
-            "is set, and the handler uses a lightweight non-empty check instead of counting all rows."
-        ),
     )
     loading: LoadingConfig = Field(
         default_factory=lambda: LoadingConfig(

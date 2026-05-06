@@ -6,9 +6,6 @@ defaults:
     initial_delay: 1
     backoff_factor: 2
 
-  # Default is false, when true, run Spark df.count() for exact row totals in logs and summaries (full scan).
-  log_full_row_count: false
-
   # Default loading: local Delta; relative storage_root resolves under the repository
   #   root (dir containing src/), e.g. repo/.spine/local-output (gitignored).
   # Override per resource if needed, or replace this block with S3 (see commented example below).
@@ -19,6 +16,8 @@ defaults:
     compression: "snappy"
     storage_root: ".spine/local-output"
     # Omit prefix to write under ``{source_name}/{resource_name}`` (set at runtime).
+    # Optional: coalesce before Delta/Iceberg append/overwrite only (see docs/configuration/loading.md).
+    # output_partitions: 1
 
   # For Amazon S3 instead, use something like:
   # (Variable names below are operator-defined examples, not Spine-reserved env vars.)
@@ -88,6 +87,13 @@ defaults:
   #   s3_connector_mode: "auto"
   #   gcs_connector_mode: "auto"
   #   azure_connector_mode: "auto"
+  # Optional observability (defaults off; see docs/configuration/loading.md):
+  #   spark_ui_enabled: false
+  #   spark_ui_port: null          # omit for Spark default 4040
+  #   spark_ui_show_console_progress: false
+  #   spark_event_log_enabled: false
+  #   spark_event_log_dir: null    # required when spark_event_log_enabled is true
+  #   spark_event_log_compress: true
   # GCS auth defaults to APPLICATION_DEFAULT (ADC/service-account/workload identity).
   # Set SPINE_GCS_AUTH_TYPE=COMPUTE_ENGINE only when you intentionally require metadata auth.
 

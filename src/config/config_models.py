@@ -59,6 +59,11 @@ class LoadingFormat(str, Enum):
     ICEBERG = "iceberg"
 
 
+INCREMENTAL_DESTINATION_COLUMN_CURSOR_FORMATS: frozenset[LoadingFormat] = frozenset(
+    (LoadingFormat.DELTA, LoadingFormat.ICEBERG)
+)
+
+
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
@@ -1290,10 +1295,11 @@ class ResourceConfig(BaseModel):
             )
         wm = inc.watermark
         if wm.cursor.strategy == IncrementalWatermarkCursorStrategy.DESTINATION_COLUMN:
-            if loading.format != LoadingFormat.DELTA:
+            if loading.format not in INCREMENTAL_DESTINATION_COLUMN_CURSOR_FORMATS:
                 raise ValueError(
                     "incremental_extract with watermark.cursor.strategy destination_column requires "
-                    "loading.format delta until other formats support MAX cursor reads."
+                    "loading.format delta or iceberg until other formats support MAX cursor reads; "
+                    f"got {loading.format.value!r}."
                 )
             ref = wm.cursor.reference_column
             if self.fields:

@@ -26,6 +26,20 @@ def _base_incremental_dict() -> dict:
     }
 
 
+def test_incremental_companion_schema_yaml_alias() -> None:
+    """YAML ``schema`` must map to ``companion_schema`` without shadowing ``BaseModel.schema``."""
+    d = {**_base_incremental_dict(), "companion": {"schema": "cdc_schema", "table": "cdc_t"}}
+    inc = IncrementalExtractConfig.model_validate(d)
+    assert inc.companion.companion_schema == "cdc_schema"
+    assert inc.companion.table == "cdc_t"
+
+
+def test_incremental_companion_accepts_python_field_name() -> None:
+    d = {**_base_incremental_dict(), "companion": {"companion_schema": "x", "table": "cdc_t"}}
+    inc = IncrementalExtractConfig.model_validate(d)
+    assert inc.companion.companion_schema == "x"
+
+
 def test_incremental_rejects_overwrite_loading() -> None:
     with pytest.raises(ValueError, match="overwrite"):
         ResourceConfig(
@@ -64,23 +78,24 @@ def test_incremental_rejects_database_select_query() -> None:
         )
 
 
-def test_incremental_requires_delta_for_destination_column_cursor() -> None:
-    with pytest.raises(ValueError, match="delta"):
-        ResourceConfig(
-            method="GET",
-            database_schema="s",
-            database_table="t",
-            fields=[SchemaField(name="bill_dt", source="BILL_DATE")],
-            loading=LoadingConfig(
-                destination="local",
-                format=LoadingFormat.ICEBERG,
-                write_mode="merge",
-                merge_keys=["id"],
-                storage_root="/tmp",
-                prefix="p/r",
-            ),
-            incremental_extract=IncrementalExtractConfig.model_validate(_base_incremental_dict()),
-        )
+def test_incremental_allows_iceberg_for_destination_column_cursor() -> None:
+    rc = ResourceConfig(
+        method="GET",
+        database_schema="s",
+        database_table="t",
+        fields=[SchemaField(name="bill_dt", source="BILL_DATE")],
+        loading=LoadingConfig(
+            destination="local",
+            format=LoadingFormat.ICEBERG,
+            write_mode="merge",
+            merge_keys=["id"],
+            storage_root="/tmp",
+            prefix="p/r",
+        ),
+        incremental_extract=IncrementalExtractConfig.model_validate(_base_incremental_dict()),
+    )
+    assert rc.loading is not None
+    assert rc.loading.format == LoadingFormat.ICEBERG
 
 
 def test_incremental_reference_column_must_match_field_name() -> None:

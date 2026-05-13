@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from pyspark.sql import Column, DataFrame, SparkSession
+from pyspark.sql import functions as F
 
 from src.config.config_models import LoadingConfig, LoadingFormat
 from src.utils.exceptions import LoaderError
@@ -55,6 +56,21 @@ class DeltaStrategy(BaseLoadStrategy):
                 extra_fields={"delta_log_path": delta_log_path, "error": str(e)},
             )
             return False
+
+    def read_max_column_as_string(self, logical_column: str) -> Optional[str]:
+        """Return ``MAX(logical_column)`` from the Delta table at the resolved path, or ``None``."""
+        if not self.table_exists():
+            return None
+        path = self.resolve_table_location().rstrip("/")
+        df = self.spark.read.format("delta").load(path)
+        if len(df.take(1)) == 0:
+            return None
+        phys = self.resolve_physical_column_name(list(df.columns), logical_column)
+        row = df.select(F.max(F.col(phys)).alias("_mx")).collect()[0]
+        val = row["_mx"]
+        if val is None:
+            return None
+        return str(val)
 
     @retry_on_transient_storage_error()
     def write_simple(

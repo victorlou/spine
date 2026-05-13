@@ -6,8 +6,8 @@ This page focuses on **`correlation`** (how main rows match companion rows) and 
 
 ## Prerequisites (short)
 
-- **`loading`**: enabled, **`format: delta`**, **`write_mode`**: **`append`** or **`merge`** (not **`overwrite`**).
-- **`watermark.cursor.strategy`**: only **`destination_column`** is implemented; it reads **`MAX(reference_column)`** from the **written** Delta table to set the lower bound for the next companion watermark comparison.
+- **`loading`**: enabled, **`format`**: **`delta`** or **`iceberg`**, **`write_mode`**: **`append`** or **`merge`** (not **`overwrite`**).
+- **`watermark.cursor.strategy`**: only **`destination_column`** is implemented; it reads **`MAX(reference_column)`** from the **written** table (Delta path or Iceberg catalog) to set the lower bound for the next companion watermark comparison.
 - **`watermark.ordering`**: only **`lexical`** is implemented for JDBC SQL generation.
 - Cannot combine with **`database_select_query`**. Optional **`database_where_predicate`** still applies on the main table (see [Configuration overview — Database resources](overview.md#database-resources-and-request-contexts)).
 
@@ -78,7 +78,7 @@ incremental_extract:
     ordering: lexical  # only lexical implemented
     cursor:
       strategy: destination_column
-      reference_column: YOUR_WRITTEN_COLUMN_NAME  # MAX from Delta; must match fields[].name if fields set
+      reference_column: YOUR_WRITTEN_COLUMN_NAME  # MAX from written table; must match fields[].name if fields set
       reference_format: none          # or yyyymmdd if using calendar tolerance
       tolerance_calendar_days: 0      # >0 only with reference_format: yyyymmdd
   correlation:

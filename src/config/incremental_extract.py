@@ -7,7 +7,7 @@ v1 supports ``kind: jdbc_companion_cdc`` only. See AGENTS.md for conventions.
 from enum import StrEnum
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class IncrementalExtractKind(StrEnum):
@@ -137,13 +137,19 @@ class IncrementalCorrelationConfig(BaseModel):
 class IncrementalCompanionConfig(BaseModel):
     """CDC / changelog table paired with the main extract table."""
 
-    schema: Optional[str] = Field(
+    model_config = ConfigDict(populate_by_name=True)
+
+    companion_schema: Optional[str] = Field(
         default=None,
-        description="Companion schema; defaults to the resource database_schema when omitted.",
+        alias="schema",
+        description=(
+            "Companion schema; defaults to the resource database_schema when omitted. "
+            "YAML key remains ``schema`` (alias)."
+        ),
     )
     table: str = Field(description="Companion table name (same rules as database_table).")
 
-    @field_validator("schema", "table", mode="before")
+    @field_validator("companion_schema", "table", mode="before")
     @classmethod
     def strip_identifiers(cls, v: object) -> Optional[str]:
         if v is None:

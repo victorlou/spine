@@ -33,7 +33,7 @@ from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
 from src.handler.incremental_cursor import (
     apply_incremental_cursor_tolerance,
-    read_max_cursor_string_from_delta,
+    read_max_cursor_string_from_destination,
 )
 from src.loader.destination_preflight import preflight_destinations
 from src.loader.loader_factory import LoaderFactory
@@ -1931,7 +1931,7 @@ class DynamicHandler(BaseHandler):
                     )
 
                 cur = wm.cursor
-                max_raw = read_max_cursor_string_from_delta(
+                max_raw = read_max_cursor_string_from_destination(
                     self.spark,
                     effective_loading,
                     source_config.type,
@@ -1944,7 +1944,7 @@ class DynamicHandler(BaseHandler):
                 )
                 warm = bound is not None and str(bound).strip() != ""
 
-                companion_schema = inc.companion.schema or schema
+                companion_schema = inc.companion.companion_schema or schema
                 companion_table = inc.companion.table
                 join_predicate = (
                     inc.correlation.join_predicate.strip()

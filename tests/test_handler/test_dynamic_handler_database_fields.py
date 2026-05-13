@@ -4,11 +4,34 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.config.config_models import ResourceConfig, SchemaField
+from src.config.config_models import (
+    ResourceConfig,
+    SchemaField,
+    SourceConfig,
+    SourceType,
+)
+from src.handler.base_handler import HandlerError
 from src.handler.dynamic_handler import DynamicHandler
 from src.planner.execution_plan import ResourceMetadata
-from src.utils.exceptions import HandlerError
 from src.utils.logger import get_logger
+
+
+def _pg_source_config() -> SourceConfig:
+    return SourceConfig(
+        type=SourceType.POSTGRESQL,
+        host="localhost",
+        port=5432,
+        username="u",
+        password="p",
+        database="db",
+        resources={
+            "placeholder": ResourceConfig(
+                method="GET",
+                database_schema="public",
+                database_table="users",
+            )
+        },
+    )
 
 
 class _SparkStringType:
@@ -74,7 +97,13 @@ class _FakeDbService:
         return None
 
     def extract_table(
-        self, schema, table, select_query=None, spark_session=None, table_read_options=None
+        self,
+        schema,
+        table,
+        select_query=None,
+        spark_session=None,
+        table_read_options=None,
+        database_where_predicate=None,
     ):
         self.extract_invocations += 1
         return self._df
@@ -96,7 +125,12 @@ def test_build_database_dataframe_infers_fields_when_omitted(patch_spark_col) ->
     )
 
     out = DynamicHandler._build_database_dataframe(
-        handler, _FakeDbService(extract_df), meta, request_contexts=[{}]
+        handler,
+        _FakeDbService(extract_df),
+        meta,
+        request_contexts=[{}],
+        effective_loading=None,
+        source_config=_pg_source_config(),
     )
     assert out is not None
     assert set(out.columns) == {"id", "label"}
@@ -125,7 +159,12 @@ def test_build_database_dataframe_respects_configured_fields(patch_spark_col) ->
     )
 
     out = DynamicHandler._build_database_dataframe(
-        handler, _FakeDbService(extract_df), meta, request_contexts=[{}]
+        handler,
+        _FakeDbService(extract_df),
+        meta,
+        request_contexts=[{}],
+        effective_loading=None,
+        source_config=_pg_source_config(),
     )
     assert out is not None
     assert out.columns == ["user_id"]
@@ -149,7 +188,14 @@ def test_build_database_dataframe_single_extract_with_multiple_contexts(patch_sp
 
     fake = _FakeDbService(extract_df)
     contexts = [{"batch": 1}, {"batch": 2}, {"batch": 3}]
-    out = DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=contexts)
+    out = DynamicHandler._build_database_dataframe(
+        handler,
+        fake,
+        meta,
+        request_contexts=contexts,
+        effective_loading=None,
+        source_config=_pg_source_config(),
+    )
 
     assert fake.extract_invocations == 1
     assert out is not None
@@ -173,7 +219,14 @@ def test_build_database_dataframe_no_contexts_no_extract() -> None:
     )
 
     fake = _FakeDbService(extract_df)
-    out = DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=[])
+    out = DynamicHandler._build_database_dataframe(
+        handler,
+        fake,
+        meta,
+        request_contexts=[],
+        effective_loading=None,
+        source_config=_pg_source_config(),
+    )
 
     assert fake.extract_invocations == 0
     assert out is None
@@ -204,5 +257,12 @@ def test_build_database_dataframe_raises_when_configured_source_column_missing(
     fake.close = MagicMock()
 
     with pytest.raises(HandlerError, match="Configured field source"):
-        DynamicHandler._build_database_dataframe(handler, fake, meta, request_contexts=[{}])
+        DynamicHandler._build_database_dataframe(
+            handler,
+            fake,
+            meta,
+            request_contexts=[{}],
+            effective_loading=None,
+            source_config=_pg_source_config(),
+        )
     fake.close.assert_called_once()

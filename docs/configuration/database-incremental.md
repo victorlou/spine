@@ -20,6 +20,10 @@ This page focuses on **`correlation`** (how main rows match companion rows) and 
 
 The bound comes from **`watermark.cursor`** (tolerance / **`reference_format`** apply after the `MAX` read). **`reference_column`** must match a **`fields`** entry **`name`** when **`fields`** is configured.
 
+### `table_read_options` on warm incremental runs
+
+Optional **`use_on_incremental_warm`** (default **`false`**) lives on **`table_read_options`**. Unless set to **`true`**, **warm** JDBC reads (after a cursor bound exists) omit **`predicates`** and **range partitioning** so the extract uses one Spark JDBC partition; **`fetch_size`** is still applied. **Cold** runs (no bound yet) always keep predicates/range as configured. Set **`true`** only when you intentionally want parallel JDBC on small warm batches.
+
 ## `incremental_extract.correlation`
 
 Correlation answers: *which companion rows “explain” a main row for the EXISTS filter?* You can rely on **automatic key inference**, set **explicit equi-join columns**, or supply a **custom join predicate**. **`join_columns`** and **`join_predicate`** are **mutually exclusive**.

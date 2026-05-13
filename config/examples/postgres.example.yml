@@ -46,6 +46,8 @@ resources:
     #   # num_partitions: 8
     #   # Or use predicates instead of partition_column (mutually exclusive):
     #   # predicates: ["id < 500000", "id >= 500000"]
+    #   # Warm incremental_extract: set true to keep predicates/range on warm JDBC reads:
+    #   # use_on_incremental_warm: true
     fields:
       - name: id
         source: id

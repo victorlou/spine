@@ -939,6 +939,15 @@ class TableReadOptions(BaseModel):
         default=None,
         description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
     )
+    use_on_incremental_warm: bool = Field(
+        default=False,
+        description=(
+            "When true, warm incremental_extract JDBC reads apply predicates and partition_column "
+            "range as configured. When false (default), those parallel modes are omitted on warm "
+            "reads so small bounded extracts use a single JDBC partition; fetch_size is unchanged. "
+            "Cold incremental loads always honor predicates and range mode."
+        ),
+    )
 
     def uses_parallel_read(self) -> bool:
         """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
@@ -974,6 +983,26 @@ class TableReadOptions(BaseModel):
                     "(Spark JDBC range partitioning)"
                 )
         return self
+
+    def effective_for_incremental_warm_jdbc_read(self) -> "TableReadOptions":
+        """
+        Options passed to Spark JDBC for a **warm** incremental extract.
+
+        When :attr:`use_on_incremental_warm` is false (default), returns a copy with
+        ``predicates`` and range-partition fields cleared so the read stays single-partition;
+        ``fetch_size`` is preserved. When true, returns ``self``.
+        """
+        if self.use_on_incremental_warm:
+            return self
+        return self.model_copy(
+            update={
+                "predicates": None,
+                "partition_column": None,
+                "lower_bound": None,
+                "upper_bound": None,
+                "num_partitions": None,
+            }
+        )
 
 
 class ResourceConfig(BaseModel):

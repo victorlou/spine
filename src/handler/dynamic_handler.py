@@ -1987,12 +1987,25 @@ class DynamicHandler(BaseHandler):
                         join_predicate,
                         main_where_predicate=where_pred,
                     )
+                    warm_read_opts = (
+                        table_opts.effective_for_incremental_warm_jdbc_read()
+                        if table_opts is not None
+                        else None
+                    )
+                    if table_opts is not None and warm_read_opts is not table_opts:
+                        self.logger.debug(
+                            "Warm incremental JDBC read using non-parallel table_read_options",
+                            extra_fields={
+                                "resource_name": resource_meta.resource_name,
+                                "source": resource_meta.source_name,
+                            },
+                        )
                     df = service.extract_table(
                         schema=schema,
                         table=table,
                         select_query=incremental_sql,
                         spark_session=self.spark,
-                        table_read_options=table_opts,
+                        table_read_options=warm_read_opts,
                         database_where_predicate=None,
                     )
                 else:

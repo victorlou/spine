@@ -7,6 +7,7 @@
 - [Configuration Topics](#configuration-topics)
 - [Spark JDBC read tuning (database resources)](#spark-jdbc-read-tuning-database-resources)
 - [Database resources and request contexts](#database-resources-and-request-contexts)
+- [Database incremental extract (JDBC)](database-incremental.md)
 
 ## Configuration Layout
 
@@ -72,6 +73,7 @@ sources:
 | [Loading](loading.md) | Object-store destinations (`local`, `s3`, `gcs`, `azure_blob`), field aliases, table formats (`delta`, `iceberg`), and write modes (`overwrite`, `append`, `merge`) |
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |
+| [Database incremental (JDBC)](database-incremental.md) | Companion CDC table, watermark/cursor, **`correlation`** (`join_columns` vs `join_predicate` vs inference, **`companion_metadata_columns`**) |
 | **PostgreSQL / HANA** | `type: postgresql` or `type: hana` with JDBC-style connection fields. PostgreSQL requires `database`. For HANA, `database` is the optional **tenant database name** sent as the JDBC `databaseName` parameter (must match a real tenant when your SQL port is shared). Omit it when `host:port` already targets a single tenant. Runtime images need the SAP **ngdbc** JAR on the Spark classpath (Spine adds `com.sap.cloud.db.jdbc:ngdbc` via `spark.jars.packages`). See [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml). |
 
 ### Spark JDBC read tuning (database resources)
@@ -101,4 +103,6 @@ For **database-backed** resources (relational sources configured with `database_
 - **Rejection:** If expansion would produce **more than one** request context for a database-backed resource, Spine **fails before ingest** when that is provable from static batch configuration (execution plan build). If batch values are resolved only at run time (for example from other resources), the handler **still raises** after expansion (after any `record_limit` on contexts) and before the extract. Only the first context would influence transformations otherwise. Fix the pipeline by removing batch expansion for that resource, using a single context (for example via `record_limit`), or splitting work into separate resources.
 - **Why:** The handler does not substitute per-context values into `database_schema`, `database_table`, or `database_select_query` today. A single extract avoids duplicate database load and avoids duplicating identical rows in Spark.
 - **Transformations:** When transformations run on database-sourced DataFrames, the request context passed in is taken from **`request_contexts[0]`** (the sole context after a successful run). Design transforms for that single context.
-- **Scoping data:** To limit which rows are read, set **`database_select_query`** to the SQL you need (static query in YAML). Spine turns off Spark JDBC V2 LIMIT/OFFSET pushdown for those reads so a `LIMIT` inside your `SELECT` is not merged into nested subqueries in a way that breaks some databases (for example SAP HANA). Per-context or templated SQL is not supported yet; if you need different extracts per context, split into separate resources or follow future docs for SQL templating.
+- **Scoping data (schema/table):** Optional **`database_where_predicate`** is a boolean SQL fragment on the main table when **`database_select_query`** is not set (a leading `WHERE` is stripped; use alias **`m.`** for main columns). It applies with or without **`incremental_extract`** and composes with **`table_read_options.predicates`** as `AND` fragments, not a second top-level `WHERE`.
+- **Scoping data (custom SQL):** Set **`database_select_query`** for a static custom `SELECT` (cannot be combined with **`database_where_predicate`**; put filters in the SQL). Spine turns off Spark JDBC V2 LIMIT/OFFSET pushdown for those reads so a `LIMIT` inside your `SELECT` is not merged into nested subqueries in a way that breaks some databases (for example SAP HANA). Per-context or templated SQL is not supported yet; if you need different extracts per context, split into separate resources or follow future docs for SQL templating.
+- **Incremental extract (optional):** Resource-level **`incremental_extract`** (`jdbc_companion_cdc`) needs Delta **`loading.format`**, **`append`** or **`merge`**, and cannot be used with **`database_select_query`**. Operator guide (**`correlation`**, cold vs warm runs, examples): [Database incremental extract (JDBC)](database-incremental.md). Schema definitions: **`src/config/incremental_extract.py`**; contributor summary: [`AGENTS.md`](../../AGENTS.md).

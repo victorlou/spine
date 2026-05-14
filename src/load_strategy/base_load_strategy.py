@@ -21,6 +21,19 @@ class BaseLoadStrategy(ABC):
     supported_write_modes: Sequence[str] = ("append", "overwrite", "merge")
     format_display_name = "table"
 
+    @staticmethod
+    def resolve_physical_column_name(columns: list[str], logical: str) -> str:
+        """Match ``logical`` to a DataFrame column name (case-sensitive, then case-insensitive)."""
+        if logical in columns:
+            return logical
+        want = logical.lower()
+        for c in columns:
+            if c.lower() == want:
+                return c
+        raise LoaderError(
+            f"Incremental cursor column {logical!r} not found in destination columns: {columns}",
+        )
+
     def __init__(
         self,
         spark: SparkSession,
@@ -148,6 +161,18 @@ class BaseLoadStrategy(ABC):
         the location directly for Spark writes and merge operations.
         """
         return self._generate_table_location()
+
+    def read_max_column_as_string(self, logical_column: str) -> Optional[str]:
+        """
+        Return ``MAX(logical_column)`` as a string for incremental watermarking, or
+        ``None`` when the table is missing, empty, or all-null for that column.
+
+        Table formats that support JDBC ``incremental_extract`` must override this;
+        the default raises :class:`LoaderError`.
+        """
+        raise LoaderError(
+            f"Incremental MAX cursor read is not implemented for loading format {self.config.format!s}"
+        )
 
     def write(self, df: DataFrame, **kwargs: Any) -> str:
         """

@@ -11,8 +11,10 @@ from src.service.postgres_service import PostgresService
 from src.service.service_factory import ServiceFactory
 from src.service.sql_database_service import (
     SqlDatabaseService,
+    jdbc_dbtable_from_plain_table,
     jdbc_read_mode_label,
     jdbc_table_option_from_custom_sql,
+    normalize_database_where_predicate,
 )
 from src.utils.exceptions import ServiceError
 
@@ -94,7 +96,13 @@ def test_sql_database_service_guard_rails() -> None:
             return f"{schema}.{table}"
 
         def _load_dataframe(
-            self, spark_session, schema, table, select_query, table_read_options=None
+            self,
+            spark_session,
+            schema,
+            table,
+            select_query,
+            table_read_options=None,
+            database_where_predicate=None,
         ):
             df = MagicMock()
             df.rdd.getNumPartitions.return_value = 1
@@ -152,7 +160,19 @@ def test_hana_jdbc_url_filters_reserved_and_encodes_values() -> None:
     assert "driver=" not in url
 
 
-def test_jdbc_table_option_from_custom_sql_wraps_bare_select() -> None:
+def test_normalize_database_where_predicate_strips_where_keyword() -> None:
+    assert normalize_database_where_predicate("  WHERE  a = 1 ") == "a = 1"
+    assert normalize_database_where_predicate(None) is None
+
+
+def test_jdbc_dbtable_from_plain_table() -> None:
+    assert jdbc_dbtable_from_plain_table('"public"."users"') == (
+        '(SELECT * FROM "public"."users") AS data_query'
+    )
+    assert jdbc_dbtable_from_plain_table(
+        '"public"."users"', database_where_predicate='m."X" = 1'
+    ) == ('(SELECT m.* FROM "public"."users" AS m WHERE (m."X" = 1)) AS data_query')
+
     assert jdbc_table_option_from_custom_sql("SELECT 1") == "(SELECT 1) AS spine_jdbc_subquery"
     assert (
         jdbc_table_option_from_custom_sql("  SELECT 1; \n") == "(SELECT 1) AS spine_jdbc_subquery"
@@ -186,7 +206,18 @@ def test_jdbc_read_mode_label() -> None:
     assert jdbc_read_mode_label(TableReadOptions(fetch_size=5000)) == "single_table"
 
 
-def test_hana_table_label_and_from_clause() -> None:
+def test_hana_rejects_where_predicate_with_custom_select_query() -> None:
+    hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
+    spark = MagicMock()
+    with pytest.raises(ServiceError, match="database_where_predicate"):
+        hana._load_dataframe(
+            spark,
+            "public",
+            "users",
+            "SELECT 1",
+            database_where_predicate="x=1",
+        )
+
     hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
     assert hana._table_label_for_log("public", "users") == '"public"."users"'
     assert hana._table_label_for_log("", "users") == '"users"'
@@ -194,12 +225,13 @@ def test_hana_table_label_and_from_clause() -> None:
 
 
 @pytest.mark.parametrize(
-    "select_query,table_read_options,expected_kwargs",
+    "select_query,table_read_options,database_where_predicate,expected_kwargs",
     [
-        ("SELECT 1", None, {"table": "(SELECT 1) AS spine_jdbc_subquery"}),
+        ("SELECT 1", None, None, {"table": "(SELECT 1) AS spine_jdbc_subquery"}),
         (
             None,
             TableReadOptions(predicates=["id > 10"]),
+            None,
             {"predicates": ["id > 10"]},
         ),
         (
@@ -210,20 +242,32 @@ def test_hana_table_label_and_from_clause() -> None:
                 upper_bound=100,
                 num_partitions=4,
             ),
+            None,
             {"column": "id", "lowerBound": 1, "upperBound": 100, "numPartitions": 4},
         ),
-        (None, None, {"table": '(SELECT * FROM "public"."users") AS data_query'}),
+        (None, None, None, {"table": '(SELECT * FROM "public"."users") AS data_query'}),
+        (
+            None,
+            None,
+            "x=1",
+            {"table": '(SELECT m.* FROM "public"."users" AS m WHERE (x=1)) AS data_query'},
+        ),
     ],
 )
 def test_hana_load_dataframe_routes_by_options(
-    select_query, table_read_options, expected_kwargs
+    select_query, table_read_options, database_where_predicate, expected_kwargs
 ) -> None:
     hana = HanaService(_settings(), "hana", _source("hana"), redis_context=object())
     spark = MagicMock()
     spark.read.jdbc.return_value = "df"
 
     out = hana._load_dataframe(
-        spark, "public", "users", select_query, table_read_options=table_read_options
+        spark,
+        "public",
+        "users",
+        select_query,
+        table_read_options=table_read_options,
+        database_where_predicate=database_where_predicate,
     )
     assert out == "df"
     kwargs = spark.read.jdbc.call_args.kwargs
@@ -246,7 +290,13 @@ def test_sql_extract_table_ensure_prerequisites_hook_runs() -> None:
             return f"{schema}.{table}"
 
         def _load_dataframe(
-            self, spark_session, schema, table, select_query, table_read_options=None
+            self,
+            spark_session,
+            schema,
+            table,
+            select_query,
+            table_read_options=None,
+            database_where_predicate=None,
         ):
             df = MagicMock()
             df.rdd.getNumPartitions.return_value = 1
@@ -272,7 +322,13 @@ def test_sql_extract_table_raises_service_error_on_loader_exception() -> None:
             return f"{schema}.{table}"
 
         def _load_dataframe(
-            self, spark_session, schema, table, select_query, table_read_options=None
+            self,
+            spark_session,
+            schema,
+            table,
+            select_query,
+            table_read_options=None,
+            database_where_predicate=None,
         ):
             raise RuntimeError("jdbc failed")
 
@@ -293,7 +349,13 @@ def test_sql_extract_table_never_calls_count_for_logging() -> None:
             return f"{schema}.{table}"
 
         def _load_dataframe(
-            self, spark_session, schema, table, select_query, table_read_options=None
+            self,
+            spark_session,
+            schema,
+            table,
+            select_query,
+            table_read_options=None,
+            database_where_predicate=None,
         ):
             df = MagicMock()
             df.rdd.getNumPartitions.return_value = 1

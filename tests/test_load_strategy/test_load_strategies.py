@@ -448,3 +448,99 @@ def test_iceberg_merge_applies_output_partitions_to_source() -> None:
 
     df.coalesce.assert_called_once_with(8)
     df.createOrReplaceTempView.assert_called_once()
+
+
+def test_iceberg_strategy_read_max_column_as_string() -> None:
+    spark = MagicMock()
+    spark.catalog.tableExists.return_value = True
+    df = MagicMock()
+    df.take.return_value = [(1,)]
+    df.columns = ["id", "dt"]
+
+    class _Row:
+        def __getitem__(self, k: str) -> object:
+            if k == "_mx":
+                return "maxval"
+            raise KeyError(k)
+
+    df.select.return_value.collect.return_value = [_Row()]
+    spark.table.return_value = df
+    mock_f = MagicMock()
+    mock_f.max.return_value.alias.return_value = MagicMock()
+    strategy = IcebergStrategy(
+        spark, _object_store(), "file:///warehouse", _config(format=LoadingFormat.ICEBERG), None
+    )
+    with patch("src.load_strategy.iceberg_strategy.F", mock_f):
+        assert strategy.read_max_column_as_string("dt") == "maxval"
+    spark.table.assert_called_once_with("iceberg.`source`.`resource`")
+
+
+def test_delta_strategy_read_max_column_as_string() -> None:
+    spark = MagicMock()
+    read_df = MagicMock()
+    read_df.take.return_value = [(1,)]
+    read_df.columns = ["id", "BILL_DATE"]
+
+    class _Row:
+        def __getitem__(self, k: str) -> object:
+            if k == "_mx":
+                return "20240102"
+            raise KeyError(k)
+
+    read_df.select.return_value.collect.return_value = [_Row()]
+    spark.read.format.return_value.load.return_value = read_df
+    mock_f = MagicMock()
+    mock_f.max.return_value.alias.return_value = MagicMock()
+
+    with (
+        patch.object(DeltaStrategy, "table_exists", return_value=True),
+        patch("src.load_strategy.delta_strategy.F", mock_f),
+    ):
+        strategy = DeltaStrategy(spark, _object_store(), "s3a://bucket", _config(), None)
+        assert strategy.read_max_column_as_string("BILL_DATE") == "20240102"
+
+    spark.read.format.assert_called_once_with("delta")
+
+
+def test_delta_strategy_read_max_returns_none_when_table_missing() -> None:
+    spark = MagicMock()
+    with patch.object(DeltaStrategy, "table_exists", return_value=False):
+        strategy = DeltaStrategy(spark, _object_store(), "s3a://bucket", _config(), None)
+        assert strategy.read_max_column_as_string("x") is None
+
+
+def test_delta_strategy_read_max_returns_none_when_no_rows() -> None:
+    spark = MagicMock()
+    read_df = MagicMock()
+    read_df.take.return_value = []
+    spark.read.format.return_value.load.return_value = read_df
+    with patch.object(DeltaStrategy, "table_exists", return_value=True):
+        strategy = DeltaStrategy(spark, _object_store(), "s3a://bucket", _config(), None)
+        assert strategy.read_max_column_as_string("id") is None
+
+
+def test_delta_strategy_read_max_unknown_column_raises() -> None:
+    spark = MagicMock()
+    read_df = MagicMock()
+    read_df.take.return_value = [(1,)]
+    read_df.columns = ["id"]
+    spark.read.format.return_value.load.return_value = read_df
+    with patch.object(DeltaStrategy, "table_exists", return_value=True):
+        strategy = DeltaStrategy(spark, _object_store(), "s3a://bucket", _config(), None)
+        with pytest.raises(LoaderError, match="not found"):
+            strategy.read_max_column_as_string("missing")
+
+
+def test_base_load_strategy_read_max_not_implemented() -> None:
+    strategy = _RecordingStrategy(MagicMock(), _object_store(), "s3a://bucket", _config(), None)
+    with pytest.raises(LoaderError, match="not implemented"):
+        strategy.read_max_column_as_string("x")
+
+
+def test_resolve_physical_column_name_matches_case_insensitive() -> None:
+    assert BaseLoadStrategy.resolve_physical_column_name(["ID", "name"], "id") == "ID"
+
+
+def test_resolve_physical_column_name_missing_raises() -> None:
+    with pytest.raises(LoaderError, match="not found"):
+        BaseLoadStrategy.resolve_physical_column_name(["a"], "z")

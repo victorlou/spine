@@ -15,6 +15,45 @@ from src.utils.logger import get_logger
 from src.utils.redis_context import RedisContextManager
 
 _SPARK_JDBC_SUBQUERY_ALIAS = "spine_jdbc_subquery"
+_JDBC_DBTABLE_ALIAS = "data_query"
+_JDBC_MAIN_TABLE_ALIAS = "m"
+
+
+def normalize_database_where_predicate(raw: Optional[str]) -> Optional[str]:
+    """
+    Strip whitespace and a single leading ``WHERE`` keyword so operators can paste fragments
+    or full predicates consistently.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    upper = text.upper()
+    if upper.startswith("WHERE "):
+        text = text[6:].strip()
+    return text if text else None
+
+
+def jdbc_dbtable_from_plain_table(
+    from_clause_sql: str,
+    *,
+    database_where_predicate: Optional[str] = None,
+) -> str:
+    """
+    Build Spark ``dbtable`` for ``SELECT *`` from a single physical table or view.
+
+    When ``database_where_predicate`` is set, it is applied inside a derived table aliased
+    as ``m`` so Spark JDBC partition ``predicates`` attach as ``AND`` fragments without a
+    second top-level ``WHERE``.
+    """
+    pred = normalize_database_where_predicate(database_where_predicate)
+    if not pred:
+        return f"(SELECT * FROM {from_clause_sql}) AS {_JDBC_DBTABLE_ALIAS}"
+    return (
+        f"(SELECT {_JDBC_MAIN_TABLE_ALIAS}.* FROM {from_clause_sql} AS {_JDBC_MAIN_TABLE_ALIAS} "
+        f"WHERE ({pred})) AS {_JDBC_DBTABLE_ALIAS}"
+    )
 
 
 def jdbc_read_mode_label(table_read_options: Optional[TableReadOptions]) -> str:
@@ -196,6 +235,7 @@ class SqlDatabaseService(BaseSourceService, ABC):
         table: str,
         select_query: Optional[str],
         table_read_options: Optional[TableReadOptions] = None,
+        database_where_predicate: Optional[str] = None,
     ) -> DataFrame:
         """Backend-specific read into a Spark DataFrame."""
 
@@ -206,6 +246,7 @@ class SqlDatabaseService(BaseSourceService, ABC):
         select_query: Optional[str] = None,
         spark_session: Optional[Any] = None,
         table_read_options: Optional[TableReadOptions] = None,
+        database_where_predicate: Optional[str] = None,
     ) -> DataFrame:
         spark_session = self._require_spark(spark_session, operation="extract_table")
         self._ensure_extract_prerequisites()
@@ -251,6 +292,7 @@ class SqlDatabaseService(BaseSourceService, ABC):
                 table,
                 select_query,
                 table_read_options=table_read_options,
+                database_where_predicate=database_where_predicate,
             )
 
             spark_partitions = df.rdd.getNumPartitions()

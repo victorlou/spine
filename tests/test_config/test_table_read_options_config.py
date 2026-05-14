@@ -109,3 +109,44 @@ def test_hana_allows_table_read_options() -> None:
             )
         },
     )
+
+
+def test_use_on_incremental_warm_defaults_false() -> None:
+    assert TableReadOptions(fetch_size=1000).use_on_incremental_warm is False
+
+
+def test_effective_for_incremental_warm_jdbc_read_returns_self_when_use_on_true() -> None:
+    opts = TableReadOptions(predicates=["a=1"], use_on_incremental_warm=True)
+    eff = opts.effective_for_incremental_warm_jdbc_read()
+    assert eff is opts
+    assert eff.predicates == ["a=1"]
+
+
+def test_effective_for_incremental_warm_jdbc_read_strips_predicates_by_default() -> None:
+    opts = TableReadOptions(
+        fetch_size=5000,
+        predicates=["x=1", "x=2"],
+    )
+    eff = opts.effective_for_incremental_warm_jdbc_read()
+    assert eff is not opts
+    assert eff.fetch_size == 5000
+    assert eff.predicates is None
+    assert not eff.uses_parallel_read()
+
+
+def test_effective_for_incremental_warm_jdbc_read_strips_range_mode_by_default() -> None:
+    opts = TableReadOptions(
+        fetch_size=100,
+        partition_column="id",
+        lower_bound=0,
+        upper_bound=10,
+        num_partitions=4,
+    )
+    eff = opts.effective_for_incremental_warm_jdbc_read()
+    assert eff is not opts
+    assert eff.fetch_size == 100
+    assert eff.partition_column is None
+    assert eff.lower_bound is None
+    assert eff.upper_bound is None
+    assert eff.num_partitions is None
+    assert not eff.uses_parallel_read()

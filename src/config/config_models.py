@@ -21,6 +21,10 @@ from pydantic import (
     model_validator,
 )
 
+from src.config.incremental_extract import (
+    IncrementalExtractConfig,
+    IncrementalWatermarkCursorStrategy,
+)
 from src.config.loading_schema import (
     OBJECT_STORE_DESTINATIONS,
     normalize_azure_account_label,
@@ -55,12 +59,19 @@ class LoadingFormat(str, Enum):
     ICEBERG = "iceberg"
 
 
+INCREMENTAL_DESTINATION_COLUMN_CURSOR_FORMATS: frozenset[LoadingFormat] = frozenset(
+    (LoadingFormat.DELTA, LoadingFormat.ICEBERG)
+)
+
+
 class LoadingConfig(BaseModel):
     """
     Data loading configuration.
     For object storage destinations, prefix should follow ``source_name/resource_name``
-    (e.g. ``my_source/users``). When prefix is omitted, the handler fills it from the
-    source and resource name at runtime.
+    (e.g. ``my_source/users``). When ``prefix`` is omitted or left blank after merge, the handler
+    fills it at runtime with ``{source_name}/{resource_name}`` for that resource. Set ``prefix``
+    explicitly only when overriding that default path. When a non-empty ``prefix`` is set in
+    YAML, it must still satisfy the ``source_name/resource_name`` segment rules validated below.
 
     For file-based formats (Parquet), the actual data will be stored in a 'data'
     subdirectory under this prefix.
@@ -92,7 +103,14 @@ class LoadingConfig(BaseModel):
     format: LoadingFormat = LoadingFormat.DELTA
     write_mode: Literal["overwrite", "append", "merge", "ignore", "error"] = "overwrite"
     compression: Optional[str] = "snappy"
-    prefix: Optional[str] = None  # For all object store destinations; required at runtime
+    prefix: Optional[str] = Field(
+        default=None,
+        description=(
+            "Object-store path prefix before the format-specific layout (e.g. ``source/resource``). "
+            "Omit or leave unset so the handler uses ``{source_name}/{resource_name}`` for this resource. "
+            "When set explicitly, must be at least two path segments and must not include a ``data`` segment."
+        ),
+    )
     storage_root: Optional[str] = Field(
         default=None,
         description=(
@@ -205,7 +223,7 @@ class LoadingConfig(BaseModel):
     @field_validator("prefix")
     @classmethod
     def validate_prefix(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        """Validate prefix format for object storage destinations."""
+        """Validate prefix format for object storage when a non-empty prefix is supplied."""
         if not info.data.get("enabled", True):
             return v
         # ``destination`` is validated before ``prefix``; aliases are already normalized.
@@ -921,6 +939,15 @@ class TableReadOptions(BaseModel):
         default=None,
         description="Spark JDBC predicates (WHERE fragments); mutually exclusive with range mode.",
     )
+    use_on_incremental_warm: bool = Field(
+        default=False,
+        description=(
+            "When true, warm incremental_extract JDBC reads apply predicates and partition_column "
+            "range as configured. When false (default), those parallel modes are omitted on warm "
+            "reads so small bounded extracts use a single JDBC partition; fetch_size is unchanged. "
+            "Cold incremental loads always honor predicates and range mode."
+        ),
+    )
 
     def uses_parallel_read(self) -> bool:
         """True when Spark will use column range or predicate-based JDBC partitioning for this resource."""
@@ -956,6 +983,26 @@ class TableReadOptions(BaseModel):
                     "(Spark JDBC range partitioning)"
                 )
         return self
+
+    def effective_for_incremental_warm_jdbc_read(self) -> "TableReadOptions":
+        """
+        Options passed to Spark JDBC for a **warm** incremental extract.
+
+        When :attr:`use_on_incremental_warm` is false (default), returns a copy with
+        ``predicates`` and range-partition fields cleared so the read stays single-partition;
+        ``fetch_size`` is preserved. When true, returns ``self``.
+        """
+        if self.use_on_incremental_warm:
+            return self
+        return self.model_copy(
+            update={
+                "predicates": None,
+                "partition_column": None,
+                "lower_bound": None,
+                "upper_bound": None,
+                "num_partitions": None,
+            }
+        )
 
 
 class ResourceConfig(BaseModel):
@@ -1041,12 +1088,42 @@ class ResourceConfig(BaseModel):
             "disabled so ``LIMIT``/``OFFSET`` in the operator SQL work with nested subqueries."
         ),
     )
+    database_where_predicate: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional SQL boolean for the **physical** ``database_schema``/``database_table`` read "
+            "(not used with ``database_select_query``). Applied inside a derived table aliased ``m``; "
+            'reference main columns as ``m."COL"`` (HANA) or ``m.col``. Combines with '
+            "``table_read_options.predicates`` and ``incremental_extract`` without duplicating ``WHERE``."
+        ),
+    )
+
+    @field_validator("database_where_predicate", mode="before")
+    @classmethod
+    def normalize_database_where_predicate_field(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        text = str(v).strip()
+        if not text:
+            return None
+        upper = text.upper()
+        if upper.startswith("WHERE "):
+            text = text[6:].strip()
+        return text if text else None
+
     table_read_options: Optional[TableReadOptions] = Field(
         default=None,
         description=(
             "Optional table read tuning (Spark JDBC partitioning, fetch size, logging). "
             "Honored for PostgreSQL and HANA sources (Spark read.jdbc). Other database kinds may "
             "reject this block until they support the same read path."
+        ),
+    )
+    incremental_extract: Optional[IncrementalExtractConfig] = Field(
+        default=None,
+        description=(
+            "Optional fetch-stage incremental bounds for database resources (companion CDC table). "
+            "Requires append or merge loading and delta format for watermark.cursor destination_column in v1."
         ),
     )
 
@@ -1212,6 +1289,75 @@ class ResourceConfig(BaseModel):
                 object.__setattr__(config, "location", default_loc)
         return self
 
+    @model_validator(mode="after")
+    def validate_database_where_vs_select_query(self) -> "ResourceConfig":
+        dq = (self.database_select_query or "").strip()
+        if self.database_where_predicate and dq:
+            raise ValueError(
+                "database_where_predicate cannot be combined with database_select_query; "
+                "include filters in the custom SELECT or omit database_select_query."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_incremental_extract_constraints(self) -> "ResourceConfig":
+        """Incremental extract rules vs loading and database_select_query."""
+        inc = self.incremental_extract
+        if inc is None:
+            return self
+        if (self.database_select_query or "").strip():
+            raise ValueError(
+                "incremental_extract cannot be combined with database_select_query; remove one of them."
+            )
+        loading = self.loading
+        if loading is None or not loading.enabled:
+            raise ValueError(
+                "incremental_extract requires enabled loading (set loading or inherit defaults with enabled true)."
+            )
+        if loading.write_mode == "overwrite":
+            raise ValueError(
+                "incremental_extract requires loading.write_mode append or merge, not overwrite."
+            )
+        if loading.write_mode in ("ignore", "error"):
+            raise ValueError(
+                f"incremental_extract is not compatible with loading.write_mode {loading.write_mode!r}."
+            )
+        wm = inc.watermark
+        if wm.cursor.strategy == IncrementalWatermarkCursorStrategy.DESTINATION_COLUMN:
+            if loading.format not in INCREMENTAL_DESTINATION_COLUMN_CURSOR_FORMATS:
+                raise ValueError(
+                    "incremental_extract with watermark.cursor.strategy destination_column requires "
+                    "loading.format delta or iceberg until other formats support MAX cursor reads; "
+                    f"got {loading.format.value!r}."
+                )
+            ref = wm.cursor.reference_column
+            if self.fields:
+                field_names = {f.name for f in self.fields}
+                if ref not in field_names:
+                    raise ValueError(
+                        f"incremental_extract watermark.cursor.reference_column {ref!r} must match a "
+                        f"configured fields entry name (written column). Names: {sorted(field_names)}."
+                    )
+
+        cmeta = inc.correlation.companion_metadata_columns
+        if cmeta and self.fields:
+            banned = {str(x).strip() for x in cmeta if x is not None and str(x).strip()}
+            for f in self.fields:
+                if f.source in banned and f.source != wm.column:
+                    raise ValueError(
+                        f"incremental_extract.fields cannot select companion-only column {f.source!r} "
+                        "(listed in correlation.companion_metadata_columns)."
+                    )
+        if inc.correlation.join_columns and self.fields:
+            sources = {f.source for f in self.fields}
+            for jc in inc.correlation.join_columns:
+                if jc not in sources:
+                    raise ValueError(
+                        f"incremental_extract correlation.join_columns: {jc!r} must appear as a field "
+                        "source when fields is configured."
+                    )
+        return self
+
     def __init__(self, **data):
         # Get defaults from parent if available
         defaults = data.pop("_defaults", None)
@@ -1328,6 +1474,13 @@ class SourceConfig(BaseModel):
                     raise ValueError(
                         f"{self.type.value} resource '{resource_name}' requires non-empty "
                         "database_schema and database_table"
+                    )
+        for resource_name, resource in self.resources.items():
+            if resource.incremental_extract is not None and resource.enabled:
+                if not is_database_source_type(self.type):
+                    raise ValueError(
+                        "incremental_extract is only supported for database source types "
+                        f"(resource '{resource_name}' has incremental_extract but source type is {self.type.value})."
                     )
         for resource_name, resource in self.resources.items():
             if resource.snapshot is not None and self.type != SourceType.REST_API:

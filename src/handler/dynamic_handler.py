@@ -31,6 +31,10 @@ from src.config.config_models import (
 from src.config.loading_schema import OBJECT_STORE_DESTINATIONS
 from src.config.settings import Settings
 from src.handler.base_handler import BaseHandler, HandlerError
+from src.handler.incremental_cursor import (
+    apply_incremental_cursor_tolerance,
+    read_max_cursor_string_from_destination,
+)
 from src.loader.destination_preflight import preflight_destinations
 from src.loader.loader_factory import LoaderFactory
 from src.parser.spark_parser import SparkParser
@@ -38,6 +42,13 @@ from src.planner.database_request_context import (
     reject_if_database_has_multiple_runtime_request_contexts,
 )
 from src.planner.execution_plan import ExecutionPlan, ResourceMetadata
+from src.service.hana_service import HanaService
+from src.service.jdbc_companion_incremental import (
+    build_jdbc_companion_incremental_select_sql,
+    discover_join_column_names,
+    escape_sql_string_literal,
+)
+from src.service.postgres_service import PostgresService
 from src.service.service_factory import ServiceFactory
 from src.utils.backfill_dates import generate_backfill_date_pairs
 from src.utils.data_utils import (
@@ -1835,6 +1846,8 @@ class DynamicHandler(BaseHandler):
         service: Any,
         resource_meta: ResourceMetadata,
         request_contexts: List[Dict[str, Any]],
+        effective_loading: Optional[LoadingConfig],
+        source_config: SourceConfig,
     ) -> Optional[DataFrame]:
         """
         Connect, extract via the database source service, project to configured fields (string typed).
@@ -1846,11 +1859,17 @@ class DynamicHandler(BaseHandler):
         ``extract_table`` is not repeated per ``request_contexts`` entry. Batch-expanded contexts
         affect REST/SDK requests, not multiple reads of the same query. Transformations
         for database resources still receive ``request_contexts[0]`` as request context.
+
+        When ``incremental_extract`` is set, ``database_select_query`` must be unset (validated in
+        config). Incremental bounds use a companion CDC table; cold runs use a full main-table read.
+        Optional ``database_where_predicate`` applies to the main table (alias ``m`` when used inside
+        the JDBC subquery or incremental outer query); it is not combined with ``database_select_query``.
         """
         resource_config = resource_meta.config
         configured_fields = resource_config.fields
         schema = resource_config.database_schema
         table = resource_config.database_table
+        where_pred = resource_config.database_where_predicate
         request_context_count = len(request_contexts)
         extract_invocations = 0
         service.connect()
@@ -1867,13 +1886,138 @@ class DynamicHandler(BaseHandler):
                 )
                 return None
 
-            df = service.extract_table(
-                schema=schema,
-                table=table,
-                select_query=resource_config.database_select_query,
-                spark_session=self.spark,
-                table_read_options=resource_config.table_read_options,
-            )
+            inc = resource_config.incremental_extract
+            table_opts = resource_config.table_read_options
+            base_select = resource_config.database_select_query
+
+            if inc is None:
+                df = service.extract_table(
+                    schema=schema,
+                    table=table,
+                    select_query=base_select,
+                    spark_session=self.spark,
+                    table_read_options=table_opts,
+                    database_where_predicate=where_pred,
+                )
+            else:
+                if effective_loading is None:
+                    raise HandlerError(
+                        "incremental_extract requires enabled loading for this resource",
+                        operation="process_resource",
+                        details={
+                            "resource_name": resource_meta.resource_name,
+                            "source": resource_meta.source_name,
+                        },
+                    )
+                if isinstance(service, HanaService):
+                    dialect = "hana"
+                    driver = HanaService.HANA_JDBC_DRIVER
+                elif isinstance(service, PostgresService):
+                    dialect = "postgresql"
+                    driver = PostgresService.POSTGRES_JDBC_DRIVER
+                else:
+                    raise HandlerError(
+                        "incremental_extract is only supported for PostgreSQL and HANA services",
+                        operation="process_resource",
+                        details={"service": type(service).__name__},
+                    )
+
+                wm = inc.watermark
+                if wm.ordering != "lexical":
+                    raise HandlerError(
+                        f"incremental_extract watermark.ordering {wm.ordering!r} is not supported in v1 "
+                        "(only lexical is implemented for JDBC predicates).",
+                        operation="process_resource",
+                    )
+
+                cur = wm.cursor
+                max_raw = read_max_cursor_string_from_destination(
+                    self.spark,
+                    effective_loading,
+                    source_config.type,
+                    cur.reference_column,
+                )
+                bound = apply_incremental_cursor_tolerance(
+                    max_raw,
+                    tolerance_calendar_days=cur.tolerance_calendar_days,
+                    reference_format=cur.reference_format,
+                )
+                warm = bound is not None and str(bound).strip() != ""
+
+                companion_schema = inc.companion.companion_schema or schema
+                companion_table = inc.companion.table
+                join_predicate = (
+                    inc.correlation.join_predicate.strip()
+                    if inc.correlation.join_predicate
+                    else None
+                )
+
+                read_props = service._jdbc_read_connection_properties(
+                    driver, table_opts, "SELECT 1"
+                )
+
+                if join_predicate:
+                    join_keys: List[str] = []
+                else:
+                    join_keys = discover_join_column_names(
+                        self.spark,
+                        service._jdbc_url,
+                        read_props,
+                        dialect,
+                        schema or "",
+                        table or "",
+                        companion_schema or "",
+                        companion_table,
+                        wm.column,
+                        inc.correlation.companion_metadata_columns,
+                        inc.correlation.join_columns,
+                    )
+
+                if warm:
+                    cursor_sql = escape_sql_string_literal(str(bound))
+                    incremental_sql = build_jdbc_companion_incremental_select_sql(
+                        dialect,
+                        schema or "",
+                        table or "",
+                        companion_schema or "",
+                        companion_table,
+                        join_keys,
+                        wm.column,
+                        cursor_sql,
+                        join_predicate,
+                        main_where_predicate=where_pred,
+                    )
+                    warm_read_opts = (
+                        table_opts.effective_for_incremental_warm_jdbc_read()
+                        if table_opts is not None
+                        else None
+                    )
+                    if table_opts is not None and warm_read_opts is not table_opts:
+                        self.logger.debug(
+                            "Warm incremental JDBC read using non-parallel table_read_options",
+                            extra_fields={
+                                "resource_name": resource_meta.resource_name,
+                                "source": resource_meta.source_name,
+                            },
+                        )
+                    df = service.extract_table(
+                        schema=schema,
+                        table=table,
+                        select_query=incremental_sql,
+                        spark_session=self.spark,
+                        table_read_options=warm_read_opts,
+                        database_where_predicate=None,
+                    )
+                else:
+                    df = service.extract_table(
+                        schema=schema,
+                        table=table,
+                        select_query=base_select,
+                        spark_session=self.spark,
+                        table_read_options=table_opts,
+                        database_where_predicate=where_pred,
+                    )
+
             extract_invocations += 1
 
             if configured_fields:
@@ -1909,6 +2053,7 @@ class DynamicHandler(BaseHandler):
                     "request_context_count": request_context_count,
                     "extract_invocations": extract_invocations,
                     "spark_partitions": out_df.rdd.getNumPartitions(),
+                    "incremental_extract": resource_config.incremental_extract is not None,
                 },
             )
             return out_df
@@ -2144,7 +2289,11 @@ class DynamicHandler(BaseHandler):
             all_data_df = None
             if is_db:
                 all_data_df = self._build_database_dataframe(
-                    service, resource_meta, request_contexts
+                    service,
+                    resource_meta,
+                    request_contexts,
+                    effective_loading,
+                    source_config,
                 )
             elif collector is not None and not collector.is_empty():
                 if use_streaming and isinstance(

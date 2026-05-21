@@ -284,7 +284,11 @@ def test_resolve_request_body_overrides_precedence_with_nested_values() -> None:
     vr.resolve.side_effect = lambda v, context=None: (
         f"{context['prefix']}-suffix"
         if isinstance(v, str) and v == "{{ prefix }}-suffix"
-        else {"resolved": True} if isinstance(v, dict) else [1, 2, 3] if isinstance(v, list) else v
+        else {"resolved": True}
+        if isinstance(v, dict)
+        else [1, 2, 3]
+        if isinstance(v, list)
+        else v
     )
     out = resolve_request_body(
         {"prefix": "raw", "joined": "{{ prefix }}-suffix", "obj": {"x": 1}, "arr": [1]},

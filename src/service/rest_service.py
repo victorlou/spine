@@ -599,7 +599,9 @@ class RestService(BaseSourceService):
                         else (
                             "2"
                             if raw_version == 20
-                            else str(raw_version) if raw_version is not None else None
+                            else str(raw_version)
+                            if raw_version is not None
+                            else None
                         )
                     )
                     server_timing = response.headers.get("Server-Timing")

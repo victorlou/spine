@@ -13,7 +13,9 @@ def _status(state: str, data_array=None, next_chunk_index=None):
     state_obj = (
         StatementState.SUCCEEDED
         if state == "SUCCEEDED"
-        else StatementState.FAILED if state == "FAILED" else SimpleNamespace(value=state)
+        else StatementState.FAILED
+        if state == "FAILED"
+        else SimpleNamespace(value=state)
     )
     return SimpleNamespace(
         status=SimpleNamespace(state=state_obj),

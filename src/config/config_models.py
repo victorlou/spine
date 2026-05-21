@@ -809,7 +809,9 @@ class AuthConfig(BaseModel):
     )
     issuer: Optional[str] = None  # Required for oauth_jwt
     private_key: Optional[str] = None  # Base64 encoded private key for oauth_jwt
-    bearer_token: Optional[str] = None  # Required for bearer_token auth (unless refresh credentials provided)
+    bearer_token: Optional[str] = (
+        None  # Required for bearer_token auth (unless refresh credentials provided)
+    )
     refresh_token: Optional[str] = None  # Optional for bearer_token (enables auto-refresh)
     token_request_content_type: Literal["json", "form"] = Field(
         default="json",

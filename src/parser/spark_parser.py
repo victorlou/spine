@@ -72,9 +72,7 @@ class SparkParser:
             key: (
                 json.dumps(value)
                 if isinstance(value, (dict, list))
-                else str(value)
-                if value is not None
-                else None
+                else str(value) if value is not None else None
             )
             for key, value in record.items()
         }
@@ -481,9 +479,7 @@ class SparkParser:
                     processed_record[field.name] = (
                         json.dumps(value)
                         if isinstance(value, (dict, list))
-                        else str(value)
-                        if value is not None
-                        else None
+                        else str(value) if value is not None else None
                     )
             else:
                 # Extract all fields

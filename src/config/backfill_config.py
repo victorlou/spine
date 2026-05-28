@@ -26,7 +26,9 @@ class BackfillStaticDateConfig:
     start: Any  # str (YYYY-MM-DD) or dict for dynamic (e.g. type: DATE, operation: TODAY)
     end: Any  # str or dict for dynamic
     increment: str  # e.g. '15 DAY'
-    inclusive: bool = False  # if False, windows contiguous (next_start=endDate+1); if True, boundary overlaps (next_start=endDate)
+    inclusive: bool = (
+        False  # if False, windows contiguous (next_start=endDate+1); if True, boundary overlaps (next_start=endDate)
+    )
 
     def __post_init__(self) -> None:
         self.increment = str(self.increment).strip().upper()

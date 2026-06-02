@@ -417,11 +417,16 @@ class SparkParser:
             },
         )
 
-        # Convert single dict to list
+        # Convert single dict to list; track whether input was a raw dict so we know
+        # whether to apply response_key unwrapping below.
+        input_was_dict = isinstance(data, dict)
         records = data if isinstance(data, list) else [data]
 
-        # Handle nested data structures (dot paths via get_nested_value; same as REST/SDK)
-        if len(records) == 1 and isinstance(records[0], dict) and self.config.response_key:
+        # Handle nested data structures (dot paths via get_nested_value; same as REST/SDK).
+        # Only unwrap when the input was a raw dict — if it was already a list the response_key
+        # was applied upstream (e.g. by RestService) and re-applying it would look for the key
+        # inside each individual record, breaking single-item lists.
+        if input_was_dict and isinstance(records[0], dict) and self.config.response_key:
             nested_list, missing = dict_response_key_to_records(
                 records[0], self.config.response_key
             )

@@ -70,9 +70,17 @@ auth:
   client_id: "${CLIENT_ID}"
   client_secret: "${CLIENT_SECRET}"
   refresh_token: "${REFRESH_TOKEN}"
+  token_request_content_type: "json"  # "json" (default) or "form"
   header_name: "Authorization"
   header_format: "Bearer {token}"
 ```
+
+`token_request_content_type` controls how the token refresh request body is encoded:
+
+| Value | Content-Type | Use when |
+|-------|-------------|----------|
+| `json` (default) | `application/json` | Most APIs |
+| `form` | `application/x-www-form-urlencoded` | APIs that require form-encoded bodies (e.g. Snapchat Ads) |
 
 ## API Key
 

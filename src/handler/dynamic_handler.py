@@ -70,8 +70,8 @@ from src.utils.dynamic_values import (
     get_resolver,
     resolve_request_body,
 )
-from src.utils.query_utils import format_query_ref_key
 from src.utils.exceptions import GracefulShutdownError
+from src.utils.query_utils import format_query_ref_key
 from src.utils.redis_context import RedisContextManager
 from src.utils.snapshot_poller import (
     SnapshotError,

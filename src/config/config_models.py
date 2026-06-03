@@ -809,8 +809,18 @@ class AuthConfig(BaseModel):
     )
     issuer: Optional[str] = None  # Required for oauth_jwt
     private_key: Optional[str] = None  # Base64 encoded private key for oauth_jwt
-    bearer_token: Optional[str] = None  # Required for bearer_token auth
+    bearer_token: Optional[str] = (
+        None  # Required for bearer_token auth (unless refresh credentials provided)
+    )
     refresh_token: Optional[str] = None  # Optional for bearer_token (enables auto-refresh)
+    token_request_content_type: Literal["json", "form"] = Field(
+        default="json",
+        description=(
+            "Content type for token refresh requests: 'json' sends application/json "
+            "(request body as JSON), 'form' sends application/x-www-form-urlencoded "
+            "(request body as form data). Most OAuth2 providers expect 'form'."
+        ),
+    )
     header_name: str = "Authorization"  # Name of the auth header
     header_format: str = "Bearer {token}"  # Format string for the auth header value
     jwt_config: Optional[JWTConfig] = None  # JWT-specific settings, required for oauth_jwt
@@ -851,8 +861,14 @@ class AuthConfig(BaseModel):
                 raise ValueError("client_id is required for api_key authentication")
 
         elif self.type == "bearer_token":
-            if not self.bearer_token:
-                raise ValueError("bearer_token is required for bearer_token authentication")
+            has_refresh_credentials = all(
+                [self.token_url, self.client_id, self.client_secret, self.refresh_token]
+            )
+            if not self.bearer_token and not has_refresh_credentials:
+                raise ValueError(
+                    "bearer_token authentication requires either a static bearer_token "
+                    "or all refresh credentials (token_url, client_id, client_secret, refresh_token)"
+                )
 
         return self
 

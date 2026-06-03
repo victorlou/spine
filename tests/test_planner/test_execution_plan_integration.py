@@ -762,7 +762,10 @@ def test_execution_plan_databricks_query_resolves_and_stores_redis(tmp_path, mon
         sources=_rest_resource_with_databricks_input("q1"),
     )
     mock_du_cls = MagicMock()
-    mock_du_cls.return_value.resolve_databricks_query.return_value = [{"id": 1}]
+    mock_du_cls.return_value.resolve_databricks_query.return_value = {
+        "data": [{"id": 1}],
+        "columns": ["id"],
+    }
     monkeypatch.setattr("src.planner.execution_plan.DatabricksUtils", mock_du_cls)
 
     redis = MagicMock()
@@ -770,10 +773,15 @@ def test_execution_plan_databricks_query_resolves_and_stores_redis(tmp_path, mon
 
     mock_du_cls.assert_called()
     redis.store.assert_called()
-    kwargs = redis.store.call_args.kwargs
-    assert kwargs["key"] == format_query_ref_key("q1")
-    assert kwargs["data"] == [{"id": 1}]
-    assert kwargs.get("ttl") == 3600
+    # First store call is for the data key
+    first_call_kwargs = redis.store.call_args_list[0].kwargs
+    assert first_call_kwargs["key"] == format_query_ref_key("q1")
+    assert first_call_kwargs["data"] == [{"id": 1}]
+    assert first_call_kwargs.get("ttl") == 3600
+    # Second store call is for the columns key
+    second_call_kwargs = redis.store.call_args_list[1].kwargs
+    assert second_call_kwargs["key"] == format_query_ref_key("q1") + ":columns"
+    assert second_call_kwargs["data"] == ["id"]
 
 
 def test_execution_plan_databricks_missing_query_ref_raises(tmp_path) -> None:

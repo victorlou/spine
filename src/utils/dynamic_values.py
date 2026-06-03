@@ -72,6 +72,35 @@ class DatabricksDeltaTableConfig(BaseModel):
     query_ref: str
 
 
+class DatabricksFilterConfig(BaseModel):
+    """Filter configuration for a structured DATABRICKS input."""
+
+    field: str  # column in the query result to filter on
+    operator: "FilterOperator" = "eq"
+    value_source: str  # name of the request_input whose current context value is the filter value
+
+
+class DatabricksInputConfig(BaseModel):
+    """
+    Structured DATABRICKS input — selects a field from a multi-column query result
+    and optionally filters rows by matching a column against another input's current value.
+
+    Example YAML:
+        value:
+          type: DATABRICKS
+          query_ref: tiktok_brand_seed_keywords
+          field: seed_keyword
+          filter:
+            field: advertiser_id
+            operator: eq
+            value_source: advertiser_id   # name of the batch input driving the outer loop
+    """
+
+    query_ref: str
+    field: str
+    filter: Optional["DatabricksFilterConfig"] = None
+
+
 class FilterOperator(str, Enum):
     """Supported filter operations."""
 
@@ -166,6 +195,9 @@ class ComplexDynamicValue(BaseModel):
     date_config: Optional[DateConfig] = None  # Added for date operations
     databricks_config: Optional[DatabricksDeltaTableConfig] = (
         None  # Added for databricks delta table operations
+    )
+    databricks_input_config: Optional[DatabricksInputConfig] = (
+        None  # Structured DATABRICKS input with field selection and optional filter
     )
     source_config: Optional[DynamicSourceReference] = (
         None  # Added for resolving values from other sources (resources)

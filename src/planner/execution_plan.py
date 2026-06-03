@@ -400,15 +400,25 @@ class ExecutionPlan:
         # Iterate through all the required queries and resolve their values
         for query_ref, query_content in self.required_queries.items():
             # Process the query using DatabricksUtils
-            resolved_query_value = databricks_utils.resolve_databricks_query(query_content)
+            resolved = databricks_utils.resolve_databricks_query(query_content)
 
             # Store the resolved values into the redis_context for usage in resolving parameters
             redis_key = format_query_ref_key(query_ref)
             self.redis_context.store(
                 key=redis_key,
-                data=resolved_query_value,
+                data=resolved["data"],
                 ttl=3600,  # 1 hour TTL
             )
+
+            # Store column names separately so structured DATABRICKS inputs can do field lookup
+            if resolved["columns"]:
+                self.redis_context.store(
+                    key=redis_key + ":columns",
+                    data=resolved["columns"],
+                    ttl=3600,
+                )
+
+            resolved_query_value = resolved["data"]
 
             self.logger.debug(
                 f"Resolved Databricks query values for {query_ref}",

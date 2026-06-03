@@ -148,7 +148,16 @@ class DatabricksUtils:
 
                 next_chunk_index = getattr(chunk_response, "next_chunk_index", None)
 
-            return result_data
+            # Extract column names from schema metadata (available for multi-column queries)
+            columns: list[str] = []
+            try:
+                schema = getattr(status_response.manifest, "schema", None)
+                if schema and getattr(schema, "columns", None):
+                    columns = [c.name for c in schema.columns]
+            except Exception:
+                pass
+
+            return {"data": result_data, "columns": columns}
 
         except Exception as e:
             raise ValueError(f"Failed to execute Databricks query: {e!s}") from e

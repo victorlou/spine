@@ -714,7 +714,10 @@ class InputConfig(BaseModel):
 
     def get_databricks_query_refs(self) -> List[str]:
         """
-        Extract Databricks query refs from parameter value (Jinja strings).
+        Extract Databricks query refs from parameter value.
+
+        Handles both Jinja string form (``{{ databricks('ref') }}``) and the structured
+        ``type: DATABRICKS`` form.
 
         Returns:
             List of query_ref strings (e.g. ["uk_aus_nz_store_locations"])
@@ -724,7 +727,28 @@ class InputConfig(BaseModel):
         refs: List[str] = []
         if isinstance(self.value, str) and "databricks(" in self.value:
             refs.extend(re.findall(r"databricks\s*\(\s*['\"]([^'\"]+)['\"]", self.value))
+        if (
+            isinstance(self.value, ComplexDynamicValue)
+            and self.value.type == DynamicValueType.DATABRICKS
+            and self.value.databricks_input_config is not None
+        ):
+            refs.append(self.value.databricks_input_config.query_ref)
         return refs
+
+    def get_databricks_config(self) -> Optional[Any]:
+        """
+        Return the structured DatabricksInputConfig if this input uses ``type: DATABRICKS``.
+
+        Returns:
+            DatabricksInputConfig when the value is a structured DATABRICKS input, None otherwise.
+        """
+        if (
+            isinstance(self.value, ComplexDynamicValue)
+            and self.value.type == DynamicValueType.DATABRICKS
+            and self.value.databricks_input_config is not None
+        ):
+            return self.value.databricks_input_config
+        return None
 
     def has_filter_config(self) -> bool:
         """

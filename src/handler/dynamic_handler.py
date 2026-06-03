@@ -58,6 +58,7 @@ from src.utils.data_utils import (
 )
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
+    DatabricksInputConfig,
     DynamicOrStaticValue,
     DynamicValue,
     DynamicValueType,
@@ -69,6 +70,7 @@ from src.utils.dynamic_values import (
     get_resolver,
     resolve_request_body,
 )
+from src.utils.query_utils import format_query_ref_key
 from src.utils.exceptions import GracefulShutdownError
 from src.utils.redis_context import RedisContextManager
 from src.utils.snapshot_poller import (
@@ -580,6 +582,14 @@ class DynamicHandler(BaseHandler):
                 filter_value=filter_value,
             )
 
+        # Structured DATABRICKS input — field selection with optional row-level filter
+        databricks_config = input_config.get_databricks_config()
+        if databricks_config:
+            return self._extract_values_from_databricks_list(
+                databricks_config=databricks_config,
+                context=context,
+            )
+
         # Dynamic input: Jinja string, or dict/ComplexDynamicValue (legacy structure)
         if input_config.value is not None:
             if isinstance(input_config.value, (DynamicValue, ComplexDynamicValue, dict)):
@@ -775,6 +785,88 @@ class DynamicHandler(BaseHandler):
                 details={"field": field, "max_allowed": _MAX_SOURCE_DISTINCT_VALUES},
             )
         return [row[field] for row in values]
+
+    def _extract_values_from_databricks_list(
+        self,
+        databricks_config: DatabricksInputConfig,
+        context: Dict[str, Any],
+    ) -> List[Any]:
+        """
+        Extract values from a structured DATABRICKS input stored in Redis.
+
+        For single-column queries the data in Redis is a flat list; the method returns it
+        directly.  For multi-column queries the data is a list-of-lists and column names are
+        stored under a separate ``<key>:columns`` key.  When a filter is configured, only
+        rows whose filter column matches the current context value of ``filter.value_source``
+        are kept.
+
+        Args:
+            databricks_config: Structured DATABRICKS input configuration.
+            context: Current request context (used to resolve the filter value).
+
+        Returns:
+            List of values for the configured ``field``.
+        """
+        redis_key = format_query_ref_key(databricks_config.query_ref)
+        data = self.redis_context.get(key=redis_key)
+        columns: List[str] = self.redis_context.get(key=redis_key + ":columns") or []
+
+        if not data:
+            self.logger.warning(
+                f"No data found in Redis for DATABRICKS query '{databricks_config.query_ref}'",
+                extra_fields={"query_ref": databricks_config.query_ref, "redis_key": redis_key},
+            )
+            return []
+
+        # Single-column query — data is already a flat list; field selection not applicable
+        if not columns:
+            return data if isinstance(data, list) else [data]
+
+        # Multi-column query — data is a list-of-lists
+        if databricks_config.field not in columns:
+            raise HandlerError(
+                f"Field '{databricks_config.field}' not found in DATABRICKS query result",
+                details={
+                    "query_ref": databricks_config.query_ref,
+                    "field": databricks_config.field,
+                    "available_columns": columns,
+                },
+            )
+        field_idx = columns.index(databricks_config.field)
+
+        rows = data
+        if databricks_config.filter:
+            filter_col = databricks_config.filter.field
+            if filter_col not in columns:
+                raise HandlerError(
+                    f"Filter column '{filter_col}' not found in DATABRICKS query result",
+                    details={
+                        "query_ref": databricks_config.query_ref,
+                        "filter_field": filter_col,
+                        "available_columns": columns,
+                    },
+                )
+            filter_idx = columns.index(filter_col)
+
+            # Resolve the filter value from the current context
+            raw_filter_val = context.get(databricks_config.filter.value_source)
+            if isinstance(raw_filter_val, list):
+                raw_filter_val = raw_filter_val[0] if raw_filter_val else None
+            filter_value = str(raw_filter_val) if raw_filter_val is not None else None
+
+            if filter_value is not None:
+                rows = [row for row in rows if str(row[filter_idx]) == filter_value]
+                self.logger.debug(
+                    "Applied DATABRICKS filter",
+                    extra_fields={
+                        "query_ref": databricks_config.query_ref,
+                        "filter_field": filter_col,
+                        "filter_value": filter_value,
+                        "matched_rows": len(rows),
+                    },
+                )
+
+        return [row[field_idx] for row in rows]
 
     def _apply_parameter_filter(
         self, df: DataFrame, input_name: str, filter_config: Any, filter_value: Optional[str] = None

@@ -663,7 +663,12 @@ def test_resolve_parameter_values_list_source_miswired() -> None:
 
 def test_resolve_parameter_values_list_no_value_no_parent() -> None:
     h = _bare_handler()
-    ic = SimpleNamespace(value=None, is_static_list=lambda: False, get_source_config=lambda: None, get_databricks_config=lambda: None)
+    ic = SimpleNamespace(
+        value=None,
+        is_static_list=lambda: False,
+        get_source_config=lambda: None,
+        get_databricks_config=lambda: None,
+    )
     with pytest.raises(HandlerError, match="No source or value defined"):
         h._resolve_parameter_values_list("p", ic, "api", "res")
 

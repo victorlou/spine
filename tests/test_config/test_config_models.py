@@ -622,8 +622,46 @@ def test_auth_config_bearer_token_valid() -> None:
 
 
 def test_auth_config_bearer_token_missing_raises() -> None:
-    with pytest.raises(ValidationError, match="bearer_token"):
+    with pytest.raises(ValidationError, match="bearer_token authentication requires"):
         AuthConfig(type="bearer_token")
+
+
+def test_auth_config_bearer_token_refresh_only_valid() -> None:
+    """All refresh credentials present, no static bearer_token → valid."""
+    auth = AuthConfig(
+        type="bearer_token",
+        token_url="https://auth.example.com/token",
+        client_id="cid",
+        client_secret="csecret",
+        refresh_token="rtok",
+    )
+    assert auth.bearer_token is None
+    assert auth.refresh_token == "rtok"
+
+
+def test_auth_config_bearer_token_partial_refresh_raises() -> None:
+    """Some refresh credentials missing and no static bearer_token → raises."""
+    with pytest.raises(ValidationError, match="bearer_token authentication requires"):
+        AuthConfig(
+            type="bearer_token",
+            token_url="https://auth.example.com/token",
+            client_id="cid",
+            # missing client_secret and refresh_token
+        )
+
+
+def test_auth_config_token_request_content_type_defaults_to_json() -> None:
+    auth = AuthConfig(type="bearer_token", bearer_token="tok")
+    assert auth.token_request_content_type == "json"
+
+
+def test_auth_config_token_request_content_type_form() -> None:
+    auth = AuthConfig(
+        type="bearer_token",
+        bearer_token="tok",
+        token_request_content_type="form",
+    )
+    assert auth.token_request_content_type == "form"
 
 
 # ---------------------------------------------------------------------------

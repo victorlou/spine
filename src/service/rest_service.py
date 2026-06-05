@@ -316,17 +316,28 @@ class RestService(BaseSourceService):
         if not self.config.auth:
             raise ServiceError("Authentication configuration is required")
 
-        response = self.session.post(
-            url=str(self.config.auth.token_url),
-            headers={"Content-Type": "application/json"},
-            json={
-                "grant_type": "refresh_token",
-                "refresh_token": self.config.auth.refresh_token,
-                "client_id": self.config.auth.client_id,
-                "client_secret": self.config.auth.client_secret,
-            },
-            timeout=self.settings.api.TIMEOUT,
-        )
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": self.config.auth.refresh_token,
+            "client_id": self.config.auth.client_id,
+            "client_secret": self.config.auth.client_secret,
+        }
+
+        content_type = getattr(self.config.auth, "token_request_content_type", "json")
+
+        if content_type == "form":
+            response = self.session.post(
+                url=str(self.config.auth.token_url),
+                data=payload,
+                timeout=self.settings.api.TIMEOUT,
+            )
+        else:
+            response = self.session.post(
+                url=str(self.config.auth.token_url),
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=self.settings.api.TIMEOUT,
+            )
         response.raise_for_status()
 
         # Handle OAuth2 response formats and set token with expiry buffer

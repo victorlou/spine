@@ -29,6 +29,7 @@ from src.utils.dynamic_values import (
 from src.utils.exceptions import HandlerError
 from src.utils.logger import get_logger
 from src.utils.snapshot_poller import SnapshotError, SnapshotTimeoutError
+from src.utils.telemetry_manager import TelemetryManager
 
 
 def _bare_handler() -> DynamicHandler:
@@ -39,6 +40,9 @@ def _bare_handler() -> DynamicHandler:
         sources={},
     )
     h.redis_context = MagicMock()
+    # Telemetry is a no-op singleton in tests; instrumented methods touch these attributes.
+    h._telemetry = TelemetryManager()
+    h._tracer = h._telemetry.get_tracer("test")
     return h
 
 

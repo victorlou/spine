@@ -10,11 +10,15 @@ from src.config.config_models import LoadingConfig
 from src.handler.dynamic_handler import DynamicHandler
 from src.utils.exceptions import HandlerError
 from src.utils.logger import get_logger
+from src.utils.telemetry_manager import TelemetryManager
 
 
 def _make_handler(default_loading: LoadingConfig) -> DynamicHandler:
     handler = DynamicHandler.__new__(DynamicHandler)
     handler.config = SimpleNamespace(defaults=SimpleNamespace(loading=default_loading))
+    # Telemetry is a no-op singleton in tests; handle() touches these attributes.
+    handler._telemetry = TelemetryManager()
+    handler._tracer = handler._telemetry.get_tracer("test")
     return handler
 
 

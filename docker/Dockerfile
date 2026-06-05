@@ -47,6 +47,12 @@ COPY config/ config/
 # Set Python path
 ENV PYTHONPATH=/
 
+# Stamp the build version so the running container self-reports service.version through telemetry
+# (defaults.telemetry.service_version reads ${SPINE_IMAGE_TAG}). Declared late to preserve layer
+# caching: only this small layer changes per commit. CI passes --build-arg SPINE_VERSION=<git sha>.
+ARG SPINE_VERSION=unknown
+ENV SPINE_IMAGE_TAG=${SPINE_VERSION}
+
 # Create startup script
 COPY docker/startup.sh /startup.sh
 RUN chmod +x /startup.sh

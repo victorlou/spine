@@ -97,6 +97,24 @@ defaults:
   # GCS auth defaults to APPLICATION_DEFAULT (ADC/service-account/workload identity).
   # Set SPINE_GCS_AUTH_TYPE=COMPUTE_ENGINE only when you intentionally require metadata auth.
 
+  # OpenTelemetry (OTLP) traces + metrics. Disabled by default; Spine is a backend-agnostic
+  # producer that exports to any OTLP collector. Standard OTEL_* env vars override these values
+  # (see docs/configuration/telemetry.md).
+  # telemetry:
+  #   enabled: true
+  #   service_name: "spine"
+  #   service_version: "${GIT_SHA:-}"           # optional; e.g. injected by CI
+  #   deployment_environment: "${DEPLOY_ENV:-}" # optional; e.g. dev, prod
+  #   endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}"
+  #   protocol: "grpc"          # grpc (4317) or http/protobuf (4318)
+  #   insecure: true            # grpc without TLS (typical in-cluster collector)
+  #   traces_enabled: true
+  #   metrics_enabled: true
+  #   # Arbitrary extra resource attributes are operator-supplied — Spine never names them.
+  #   # Add deployment- or vendor-specific attribution here (or via OTEL_RESOURCE_ATTRIBUTES):
+  #   resource_attributes:
+  #     team: "data-platform"
+
 # Named SQL files live under config/queries/ (operator-local, not committed).
 # See config/examples/sample_query.sql for a minimal template.
 queries: []

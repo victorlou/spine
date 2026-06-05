@@ -32,6 +32,7 @@ from src.config.loading_schema import (
     normalize_loading_destination,
     normalize_object_store_bucket_label,
 )
+from src.config.telemetry import TelemetryConfig
 from src.utils.dynamic_values import (
     ComplexDynamicValue,
     DynamicOrStaticValue,
@@ -1718,6 +1719,13 @@ class DefaultsConfig(BaseModel):
     spark_runtime: SparkRuntimeConfig = Field(
         default_factory=SparkRuntimeConfig,
         description="Spark host profile and per-cloud connector provisioning (see docs/configuration/loading.md).",
+    )
+    telemetry: TelemetryConfig = Field(
+        default_factory=TelemetryConfig,
+        description=(
+            "OpenTelemetry (OTLP) producer settings. Disabled by default; see "
+            "docs/configuration/telemetry.md. Standard OTEL_* env vars override these values."
+        ),
     )
 
 

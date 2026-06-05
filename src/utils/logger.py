@@ -24,6 +24,8 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any, Dict, Optional, Set
 
+from src.utils.telemetry_logging import TraceCorrelationFilter
+
 # Redaction placeholder for sensitive values
 REDACTED_PLACEHOLDER = "***REDACTED***"
 
@@ -243,6 +245,8 @@ class StructuredLogger:
         if not any(isinstance(h.formatter, StructuredFormatter) for h in self.logger.handlers):
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setFormatter(StructuredFormatter())
+            # Inject active trace/span ids into records (no-op until telemetry enables correlation).
+            console_handler.addFilter(TraceCorrelationFilter())
             self.logger.addHandler(console_handler)
 
     def _log(

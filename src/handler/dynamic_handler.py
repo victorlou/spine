@@ -4,9 +4,11 @@ Configuration-driven handler for orchestrating data ingestion.
 
 import os
 import signal
+import time
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Set, Union
 
+from opentelemetry import trace
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import col
 
@@ -76,6 +78,7 @@ from src.utils.snapshot_poller import (
     SnapshotPoller,
     SnapshotTimeoutError,
 )
+from src.utils.telemetry_manager import TelemetryManager, traced
 
 # Maximum number of distinct values collected from a SOURCE parameter field for request fan-out.
 # Exceeding this limit would cause an unbounded number of API requests and OOM the driver.
@@ -121,6 +124,8 @@ class DynamicHandler(BaseHandler):
         self.backfill_mode = backfill_mode
         self.spark_manager = None
         self.spark: SparkSession | None = None
+        self._telemetry = TelemetryManager()
+        self._tracer = self._telemetry.get_tracer("spine.handler")
         self._setup_spark()
 
         # Initialize Redis context
@@ -399,6 +404,7 @@ class DynamicHandler(BaseHandler):
 
         return resolved_headers
 
+    @traced("spine.service.create")
     def _create_service(self, source_name: str, source_config: SourceConfig):
         """
         Create a service instance for the given source.
@@ -1027,6 +1033,7 @@ class DynamicHandler(BaseHandler):
 
         return parent_context
 
+    @traced("spine.parse")
     def _parse_data(
         self,
         raw_data: Union[List[Dict[str, Any]], Dict[str, Any]],
@@ -1538,6 +1545,7 @@ class DynamicHandler(BaseHandler):
                     overrides[name] = r.resolve(v)
         return resolve_request_body({}, resolver=r, overrides=overrides, exclude_keys=None)
 
+    @traced("spine.extract")
     def _make_single_request(
         self,
         resource_config: ResourceConfig,
@@ -1841,6 +1849,7 @@ class DynamicHandler(BaseHandler):
                 )
             )
 
+    @traced("spine.extract")
     def _build_database_dataframe(
         self,
         service: Any,
@@ -2060,6 +2069,7 @@ class DynamicHandler(BaseHandler):
         finally:
             service.close()
 
+    @traced("spine.resource.process")
     def _process_resource(
         self, resource_meta: ResourceMetadata, service: Any, source_config: SourceConfig
     ) -> Dict[str, Any]:
@@ -2082,6 +2092,11 @@ class DynamicHandler(BaseHandler):
         source_name = resource_meta.source_name
         resource_name = resource_meta.resource_name
         resource_config = resource_meta.config
+
+        span = trace.get_current_span()
+        span.set_attribute("spine.source", source_name)
+        span.set_attribute("spine.resource", resource_name)
+        span.set_attribute("spine.source_type", str(source_config.type))
 
         # Log resource processing start
         self.logger.debug(
@@ -2417,11 +2432,16 @@ class DynamicHandler(BaseHandler):
                                 "database_source": is_db,
                             },
                         )
-                        location = loader.load(
-                            data=all_data_df,
-                            config=effective_loading,
-                            source_type=source_type,
-                        )
+                        with self._tracer.start_as_current_span("spine.load") as load_span:
+                            load_span.set_attribute(
+                                "spine.destination", str(effective_loading.destination)
+                            )
+                            load_span.set_attribute("spine.format", str(effective_loading.format))
+                            location = loader.load(
+                                data=all_data_df,
+                                config=effective_loading,
+                                source_type=source_type,
+                            )
                         self.logger.info(
                             "Finished destination load",
                             extra_fields={
@@ -2580,6 +2600,12 @@ class DynamicHandler(BaseHandler):
                         )
                         continue
 
+                    metric_attrs = {
+                        "source": source_name,
+                        "resource": resource_name,
+                        "stage": str(stage.stage_number),
+                    }
+                    _t0 = time.perf_counter()
                     try:
                         # Create service for this source if needed
                         service = self._create_service(source_name, source_config)
@@ -2592,6 +2618,11 @@ class DynamicHandler(BaseHandler):
                         )
 
                         source_results["resources"][resource_name] = resource_result
+                        self._telemetry.record_resource(
+                            resource_result.get("status", "success"),
+                            (time.perf_counter() - _t0) * 1000.0,
+                            metric_attrs,
+                        )
 
                         if resource_result.get("status") == "failed":
                             source_results["status"] = "failed"
@@ -2616,6 +2647,9 @@ class DynamicHandler(BaseHandler):
                         )
 
                     except Exception as e:
+                        self._telemetry.record_resource(
+                            "failed", (time.perf_counter() - _t0) * 1000.0, metric_attrs
+                        )
                         error_details = {
                             "source": source_name,
                             "resource_name": resource_name,

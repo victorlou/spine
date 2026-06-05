@@ -6,14 +6,23 @@ from unittest.mock import MagicMock
 import pytest
 
 import src.main as main_module
+from src.config.telemetry import TelemetryConfig
+
+
+def _fake_settings(sources: dict) -> SimpleNamespace:
+    """Settings stub including disabled telemetry, matching what run_pipeline reads."""
+    return SimpleNamespace(
+        pipeline_config=SimpleNamespace(
+            sources=sources,
+            defaults=SimpleNamespace(telemetry=TelemetryConfig()),
+        )
+    )
 
 
 def test_run_pipeline_success_logs_nested_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "set_root_log_level", lambda _lvl: None)
 
-    settings = SimpleNamespace(
-        pipeline_config=SimpleNamespace(sources={"api": object()}),
-    )
+    settings = _fake_settings({"api": object()})
     monkeypatch.setattr(main_module, "get_settings", lambda selection=None: settings)
 
     handler = MagicMock()
@@ -36,11 +45,7 @@ def test_run_pipeline_success_logs_nested_resources(monkeypatch: pytest.MonkeyPa
 def test_run_pipeline_failed_source_logs_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "set_root_log_level", lambda _lvl: None)
     monkeypatch.setattr(
-        main_module,
-        "get_settings",
-        lambda selection=None: SimpleNamespace(
-            pipeline_config=SimpleNamespace(sources={"x": object()})
-        ),
+        main_module, "get_settings", lambda selection=None: _fake_settings({"x": object()})
     )
     handler = MagicMock()
     handler.execution_plan.summarize.return_value = {}
@@ -63,7 +68,7 @@ def test_run_pipeline_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         main_module,
         "get_settings",
-        lambda selection=None: SimpleNamespace(pipeline_config=SimpleNamespace(sources={})),
+        lambda selection=None: _fake_settings({}),
     )
 
     def boom():
@@ -89,7 +94,7 @@ def test_run_pipeline_graceful_shutdown(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(
         main_module,
         "get_settings",
-        lambda selection=None: SimpleNamespace(pipeline_config=SimpleNamespace(sources={})),
+        lambda selection=None: _fake_settings({}),
     )
 
     def boom():
@@ -113,7 +118,7 @@ def test_run_pipeline_validate_only_and_show_plan(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         main_module,
         "get_settings",
-        lambda selection=None: SimpleNamespace(pipeline_config=SimpleNamespace(sources={"a": 1})),
+        lambda selection=None: _fake_settings({"a": 1}),
     )
     handler = MagicMock()
     handler.execution_plan.summarize.return_value = {"stages": []}
@@ -134,7 +139,7 @@ def test_run_pipeline_pipeline_error_format(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(
         main_module,
         "get_settings",
-        lambda selection=None: SimpleNamespace(pipeline_config=SimpleNamespace(sources={})),
+        lambda selection=None: _fake_settings({}),
     )
 
     def boom():
@@ -160,7 +165,7 @@ def test_run_pipeline_unknown_error_uses_format_unknown_error(
     monkeypatch.setattr(
         main_module,
         "get_settings",
-        lambda selection=None: SimpleNamespace(pipeline_config=SimpleNamespace(sources={})),
+        lambda selection=None: _fake_settings({}),
     )
 
     def boom():

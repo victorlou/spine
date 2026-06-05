@@ -80,6 +80,18 @@ SPINE_RUNTIME_ENV_KEYS = (
     "SPARK_SUBMIT_OPTS",
 )
 
+OTEL_ENV_KEYS = (
+    "OTEL_SDK_DISABLED",
+    "OTEL_SERVICE_NAME",
+    "OTEL_RESOURCE_ATTRIBUTES",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+)
+
 CLOUD_AUTH_ENV_KEYS = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -121,6 +133,36 @@ def _clear_external_env(monkeypatch: pytest.MonkeyPatch) -> None:
     _delenv_all(monkeypatch, MANAGED_PLATFORM_ENV_KEYS)
     _delenv_all(monkeypatch, SPINE_RUNTIME_ENV_KEYS)
     _delenv_all(monkeypatch, CLOUD_AUTH_ENV_KEYS)
+    _delenv_all(monkeypatch, OTEL_ENV_KEYS)
+
+
+def reset_otel_global_providers() -> None:
+    """Clear the OTEL global tracer/meter providers and their set-once guards.
+
+    The OpenTelemetry API installs the global provider exactly once; tests that
+    install a provider via ``TelemetryManager`` must reset this guard so a later
+    test is not stuck with the first test's provider.
+    """
+    import opentelemetry.metrics._internal as metrics_internal
+    import opentelemetry.trace as trace_api
+    from opentelemetry.util._once import Once
+
+    trace_api._TRACER_PROVIDER = None
+    trace_api._TRACER_PROVIDER_SET_ONCE = Once()
+    metrics_internal._METER_PROVIDER = None
+    metrics_internal._METER_PROVIDER_SET_ONCE = Once()
+
+
+@pytest.fixture(autouse=True)
+def _reset_telemetry() -> None:
+    """Reset the telemetry singleton and OTEL global providers around each test."""
+    from src.utils.telemetry_manager import reset_for_tests
+
+    reset_for_tests()
+    reset_otel_global_providers()
+    yield
+    reset_for_tests()
+    reset_otel_global_providers()
 
 
 # ---------------------------------------------------------------------------

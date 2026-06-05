@@ -9,12 +9,14 @@ import time
 from typing import Any, Dict, Optional, Set
 
 import click
+from opentelemetry import trace
 
 from src.config.settings import get_settings
 from src.handler.dynamic_handler import DynamicHandler
 from src.utils.env_manager import load_pipeline_dotenv, process_environment_variables
 from src.utils.exceptions import GracefulShutdownError, PipelineError
 from src.utils.logger import get_logger, set_root_log_level
+from src.utils.telemetry_manager import TelemetryManager
 
 
 def parse_select(select_str: str) -> Dict[str, Optional[Set[str]]]:
@@ -105,6 +107,9 @@ def run_pipeline(
         # Get settings and configuration (filter sources early if specified)
         settings = get_settings(selection=selection)
 
+        # Initialize telemetry (no-op unless enabled and an OTLP endpoint is resolvable).
+        TelemetryManager().init(settings.pipeline_config.defaults.telemetry)
+
         # Create handler with settings and selection filter
         handler = DynamicHandler(
             settings,
@@ -135,8 +140,21 @@ def run_pipeline(
             }
             logger.info("Configuration validation successful")
         else:
-            # Run full pipeline
-            results = handler.handle()
+            # Run full pipeline under a root span so resource spans nest beneath it.
+            tracer = trace.get_tracer("spine.pipeline")
+            with tracer.start_as_current_span("spine.pipeline.run") as run_span:
+                run_span.set_attribute(
+                    "spine.selection", str(sorted(selection)) if selection else "all"
+                )
+                run_span.set_attribute("spine.backfill", backfill)
+                if limit is not None:
+                    run_span.set_attribute("spine.limit", limit)
+
+                results = handler.handle()
+
+                run_span.set_attribute("spine.status", results.get("status", "unknown"))
+                if results.get("status") != "success":
+                    run_span.set_status(trace.StatusCode.ERROR)
 
             # Log results summary
             status = results["status"]
@@ -293,6 +311,8 @@ def main(
     except GracefulShutdownError as e:
         logger = get_logger("Pipeline")
         logger.warning("Pipeline terminated (SIGTERM)", extra_fields={"message": str(e)})
+        # Flush buffered telemetry promptly on SIGTERM (atexit is the normal-path backstop).
+        TelemetryManager().shutdown()
         print(json.dumps({"status": "interrupted", "message": str(e)}, indent=2))
         sys.exit(130)
     except Exception as e:

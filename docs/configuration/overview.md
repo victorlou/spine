@@ -73,6 +73,7 @@ sources:
 | [Loading](loading.md) | Object-store destinations (`local`, `s3`, `gcs`, `azure_blob`), field aliases, table formats (`delta`, `iceberg`), and write modes (`overwrite`, `append`, `merge`) |
 | [Auth](auth.md) | OAuth JWT, bearer token, API key |
 | [Transformations](transformations.md) | add_column, add_column_from_request, ensure_param_values_in_output |
+| [Telemetry (OpenTelemetry)](telemetry.md) | OTLP traces + metrics producer; `defaults.telemetry`, standard `OTEL_*` env var precedence, agnostic resource attributes |
 | [Database incremental (JDBC)](database-incremental.md) | Companion CDC table, watermark/cursor, **`correlation`** (`join_columns` vs `join_predicate` vs inference, **`companion_metadata_columns`**) |
 | **PostgreSQL / HANA** | `type: postgresql` or `type: hana` with JDBC-style connection fields. PostgreSQL requires `database`. For HANA, `database` is the optional **tenant database name** sent as the JDBC `databaseName` parameter (must match a real tenant when your SQL port is shared). Omit it when `host:port` already targets a single tenant. Runtime images need the SAP **ngdbc** JAR on the Spark classpath (Spine adds `com.sap.cloud.db.jdbc:ngdbc` via `spark.jars.packages`). See [config/examples/postgres.example.yml](../../config/examples/postgres.example.yml). |
 

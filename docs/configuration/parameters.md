@@ -11,6 +11,8 @@ All resource inputs (path, query, and body) are configured under **request_input
   - [SOURCE](#source)
   - [DATE](#date)
   - [DATABRICKS](#databricks)
+  - [Correlated inputs](#correlated-inputs)
+  - [Lookup inputs](#lookup-inputs)
 - [Iteration and batch size](#iteration-and-batch-size)
 - [Nested value support](#nested-value-support)
 - [Request and input formats](#request-and-input-formats)
@@ -145,7 +147,63 @@ request_inputs:
           separator: ";"
 ```
 
-**Multiple fields**: The result is a list of lists; downstream logic must handle parsing.
+**Multiple fields**: A multi-column query resolves to a list of row dicts keyed by column name
+(e.g. `[{"store": "a", "gtin": 1}, ...]`). Use `column=` to project a single column, or use the
+[correlated](#correlated-inputs) / [lookup](#lookup-inputs) patterns below to drive requests from a
+multi-column result.
+
+### Correlated inputs
+
+By default, multiple batched inputs form a cartesian product. To instead iterate two or more
+columns **row-by-row** (zipped) from a single multi-column query, give them the same `correlate`
+group and select one column each with `column=`:
+
+```yaml
+request_inputs:
+  store:
+    value: "{{ databricks('store_gtin_pairs', column='store') }}"
+    correlate: pair
+    batch_size: 1
+    request_format: "string"
+  gtin:
+    value: "{{ databricks('store_gtin_pairs', column='gtin') }}"
+    correlate: pair
+    batch_size: 1
+    request_format: "string"
+```
+
+Given a query returning `(a,1) (a,2) (a,3) (b,1) (c,2) (c,3)`, this makes **6** requests (one per
+row), not the 6x6 cartesian product. Members of a `correlate` group must reference the same query,
+each select a column, and share the same `batch_size` (which sets the number of rows per request).
+
+### Lookup inputs
+
+To batch on one value and send all related values per request, source an input from a databricks
+table (`source: "databricks:<query_ref>"`) and filter it by the current request's value. Filter
+`value_source: { input: <name> }` references another request input by name:
+
+```yaml
+request_inputs:
+  store:
+    value: "{{ databricks('stores') }}"
+    batch_size: 1
+    request_format: "string"
+  gtin:
+    value:
+      type: SOURCE
+      source_config:
+        source: "databricks:store_gtin_pairs"
+        field: "gtin"
+        filter:
+          field: "store"
+          type: column
+          operator: eq
+          value_source: { input: "store" }
+          value_type: parameter
+    request_format: "array"
+```
+
+With the same dataset, this makes one request per store: `a -> [1,2,3]`, `b -> [1]`, `c -> [2,3]`.
 
 ## Iteration and batch size
 

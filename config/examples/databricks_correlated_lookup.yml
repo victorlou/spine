@@ -1,0 +1,89 @@
+# Databricks-driven request inputs: correlated (zip) and lookup.
+#
+# Fictional retail inventory API showing how a multi-column Databricks query can drive
+# requests row-by-row (correlated) or as per-key batches (lookup). See
+# docs/configuration/parameters.md and docs/configuration/value-resolution.md.
+#
+# To run this template:
+#   1. Copy this file into config/sources/ and set enabled: true.
+#   2. Copy demo_stores.sql and demo_store_gtin_pairs.sql into config/queries/.
+#   3. Register them under `queries:` in config/defaults.yml, e.g.:
+#        queries:
+#          - name: "demo_stores"
+#            file: "demo_stores.sql"
+#          - name: "demo_store_gtin_pairs"
+#            file: "demo_store_gtin_pairs.sql"
+enabled: false
+type: "rest_api"
+base_url: "https://api.demo-retail.example.com/"
+
+resources:
+  # Correlated: iterate the (store_id, gtin) rows together (zipped), one request per row.
+  # demo_store_gtin_pairs returns rows like (a, 1), (a, 2), (b, 1) -> 3 requests, NOT 3x2.
+  inventory_by_pair:
+    path: "inventory"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      store_id:
+        value: "{{ databricks('demo_store_gtin_pairs', column='store_id') }}"
+        correlate: "store_gtin"
+        batch_size: 1
+        request_format: "string"
+      gtin:
+        value: "{{ databricks('demo_store_gtin_pairs', column='gtin') }}"
+        correlate: "store_gtin"
+        batch_size: 1
+        request_format: "string"
+
+    fields:
+      - name: "store_id"
+        source: "storeId"
+      - name: "gtin"
+        source: "gtin"
+      - name: "on_hand"
+        source: "onHand"
+
+    loading:
+      prefix: "demo_retail/inventory_by_pair"
+
+  # Lookup: batch one request per store and send all of that store's gtins as an array.
+  # store_id drives iteration (distinct stores); gtin is looked up from the pairs table,
+  # filtered by the current store_id -> a -> [1, 2, 3], b -> [1], c -> [2, 3].
+  inventory_by_store:
+    path: "stores/{store_id}/inventory"
+    method: "GET"
+    response_type: "json"
+
+    request_inputs:
+      store_id:
+        location: "path"
+        value: "{{ databricks('demo_stores') }}"
+        batch_size: 1
+        request_format: "string"
+      gtins:
+        value:
+          type: SOURCE
+          source_config:
+            source: "databricks:demo_store_gtin_pairs"
+            field: "gtin"
+            filter:
+              field: "store_id"
+              type: column
+              operator: eq
+              value_source:
+                input: "store_id"
+              value_type: parameter
+        request_format: "array"
+
+    fields:
+      - name: "store_id"
+        source: "storeId"
+      - name: "gtin"
+        source: "gtin"
+      - name: "on_hand"
+        source: "onHand"
+
+    loading:
+      prefix: "demo_retail/inventory_by_store"

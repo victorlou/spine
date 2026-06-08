@@ -325,6 +325,9 @@ class RestService(BaseSourceService):
 
         content_type = getattr(self.config.auth, "token_request_content_type", "json")
 
+        # RFC 6749 specifies form-encoded as the OAuth2 standard for token requests;
+        # some providers also accept JSON as a convenience. Use token_request_content_type
+        # in the source auth config to select the format the provider requires.
         if content_type == "form":
             response = self.session.post(
                 url=str(self.config.auth.token_url),

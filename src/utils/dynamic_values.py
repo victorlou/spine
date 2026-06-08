@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from databricks.sdk import WorkspaceClient
 from jinja2 import Environment, StrictUndefined
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from src.utils.exceptions import ResolverError
 from src.utils.logger import get_logger
@@ -94,10 +94,25 @@ class FilterType(str, Enum):
 
 
 class FilterValueSource(BaseModel):
-    """Configuration for parameter-based value sources."""
+    """
+    Configuration for parameter-based filter value sources.
 
-    source: str
-    field: str
+    Either reference another resource's field (``source`` + ``field``) or another request input in
+    the same resource by name (``input``). The ``input`` form is used by databricks lookups to
+    filter the lookup table by the current request's value (e.g. the current ``store``).
+    """
+
+    source: Optional[str] = None
+    field: Optional[str] = None
+    input: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> "FilterValueSource":
+        if self.input is None and (self.source is None or self.field is None):
+            raise ValueError(
+                "value_source must specify either 'input' or both 'source' and 'field'"
+            )
+        return self
 
 
 class FilterConfig(BaseModel):
@@ -413,6 +428,46 @@ class DynamicValueResolver:
         return value
 
 
+def project_databricks_column(rows: Any, query_ref: str, column: str) -> List[Any]:
+    """
+    Project a single named column from a multi-column databricks result.
+
+    Multi-column databricks queries resolve to a list of row dicts keyed by column name. This
+    returns the values for ``column`` preserving row order and duplicates, which is what makes
+    correlated (zipped) request inputs align row-by-row.
+
+    Raises:
+        ResolverError: If the cached result is not a list of row dicts, or the column is missing.
+    """
+    if not isinstance(rows, list):
+        raise ResolverError(
+            f"databricks('{query_ref}', column='{column}') requires a multi-column query result "
+            f"(list of row dicts), got {type(rows).__name__}",
+            details={"query_ref": query_ref, "column": column},
+            operation="project_databricks_column",
+        )
+
+    projected: List[Any] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ResolverError(
+                f"databricks('{query_ref}', column='{column}') requires a multi-column query "
+                f"result (list of row dicts); got a row of type {type(row).__name__}. Ensure the "
+                "query selects more than one column.",
+                details={"query_ref": query_ref, "column": column},
+                operation="project_databricks_column",
+            )
+        if column not in row:
+            raise ResolverError(
+                f"Column '{column}' not found in databricks query '{query_ref}'. "
+                f"Available columns: {list(row.keys())}",
+                details={"query_ref": query_ref, "column": column},
+                operation="project_databricks_column",
+            )
+        projected.append(row[column])
+    return projected
+
+
 class EnvProxy:
     """Proxy for environment variables in Jinja templates. Use env.VAR_NAME or env['VAR_NAME']."""
 
@@ -479,9 +534,12 @@ class JinjaValueResolver:
             config = DateConfig(operation=op, days=days, format=format)
             return self._legacy_resolver.get_date(config)
 
-        def databricks(query_ref: str) -> Any:
+        def databricks(query_ref: str, column: Optional[str] = None) -> Any:
             config = DatabricksDeltaTableConfig(query_ref=query_ref)
-            return self._legacy_resolver.resolve_databricks_delta_table_value(config)
+            result = self._legacy_resolver.resolve_databricks_delta_table_value(config)
+            if column is None:
+                return result
+            return project_databricks_column(result, query_ref, column)
 
         def rsa_sign(
             key: str,

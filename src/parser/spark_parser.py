@@ -420,8 +420,20 @@ class SparkParser:
         # Convert single dict to list
         records = data if isinstance(data, list) else [data]
 
-        # Handle nested data structures (dot paths via get_nested_value; same as REST/SDK)
-        if len(records) == 1 and isinstance(records[0], dict) and self.config.response_key:
+        # Handle nested data structures (dot paths via get_nested_value; same as REST/SDK).
+        # Unwrap when the first record is a dict that still contains the response_key at the
+        # top level. This covers two cases:
+        #   1. input was a raw dict (e.g. {"accounts": [...]}) — always unwrap.
+        #   2. input was a list whose sole element is a wrapper dict (e.g. [{"accounts": [...]}])
+        #      — unwrap only if the key is present, so we don't re-apply to already-extracted
+        #      single-item lists where RestService already unwrapped upstream (snapchat_ads case).
+        first_record_has_key = (
+            len(records) == 1
+            and isinstance(records[0], dict)
+            and self.config.response_key
+            and self.config.response_key in records[0]
+        )
+        if first_record_has_key:
             nested_list, missing = dict_response_key_to_records(
                 records[0], self.config.response_key
             )

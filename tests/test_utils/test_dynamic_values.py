@@ -23,10 +23,43 @@ from src.utils.dynamic_values import (
     JinjaValueResolver,
     ValueResolver,
     get_resolver,
+    project_databricks_column,
     resolve_headers_dict,
     resolve_request_body,
 )
 from src.utils.exceptions import ResolverError
+
+
+def test_project_databricks_column_returns_row_aligned_values() -> None:
+    rows = [
+        {"store": "a", "gtin": 1},
+        {"store": "a", "gtin": 2},
+        {"store": "b", "gtin": 1},
+    ]
+    assert project_databricks_column(rows, "pairs", "store") == ["a", "a", "b"]
+    assert project_databricks_column(rows, "pairs", "gtin") == [1, 2, 1]
+
+
+def test_project_databricks_column_missing_column_raises() -> None:
+    with pytest.raises(ResolverError, match="Column 'gtin' not found"):
+        project_databricks_column([{"store": "a"}], "pairs", "gtin")
+
+
+def test_project_databricks_column_non_dict_rows_raises() -> None:
+    with pytest.raises(ResolverError, match="multi-column query"):
+        project_databricks_column(["a", "b"], "pairs", "gtin")
+
+
+def test_jinja_databricks_column_projection() -> None:
+    redis = MagicMock()
+    redis.get.return_value = [
+        {"store": "a", "gtin": 1},
+        {"store": "b", "gtin": 2},
+    ]
+    resolver = JinjaValueResolver(redis_context=redis)
+
+    assert resolver.resolve("{{ databricks('pairs', column='store') }}") == ["a", "b"]
+    assert resolver.resolve("{{ databricks('pairs', column='gtin') }}") == [1, 2]
 
 
 def test_filter_config_rejects_nondefault_operator_for_non_column_type() -> None:

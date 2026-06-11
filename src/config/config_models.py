@@ -40,6 +40,7 @@ from src.utils.dynamic_values import (
     DynamicValueType,
     get_resolver,
 )
+from src.utils.query_utils import is_databricks_source_ref, parse_databricks_source_ref
 from src.utils.redis_context import RedisContextManager
 
 QUERIES_DIR: str = "queries"
@@ -727,6 +728,33 @@ class InputConfig(BaseModel):
             refs.extend(re.findall(r"databricks\s*\(\s*['\"]([^'\"]+)['\"]", self.value))
         return refs
 
+    def get_databricks_column(self) -> Optional[str]:
+        """
+        Extract the ``column=`` argument from a ``databricks(...)`` Jinja value, if present.
+
+        Returns:
+            The column name selected via ``{{ databricks('ref', column='col') }}``, or None.
+        """
+        import re
+
+        if isinstance(self.value, str) and "databricks(" in self.value:
+            match = re.search(r"column\s*=\s*['\"]([^'\"]+)['\"]", self.value)
+            if match:
+                return match.group(1)
+        return None
+
+    def get_databricks_source_ref(self) -> Optional[str]:
+        """
+        Return the databricks query_ref when this input's SOURCE targets a databricks table.
+
+        Detects ``source_config.source`` of the form ``databricks:<ref>`` (used by lookups) so the
+        planner can load and execute the query at plan build like other databricks refs.
+        """
+        source_config = self.get_source_config()
+        if source_config and is_databricks_source_ref(source_config.source):
+            return parse_databricks_source_ref(source_config.source)
+        return None
+
     def has_filter_config(self) -> bool:
         """
         Check if this parameter has a filter configuration defined.
@@ -781,6 +809,15 @@ class RequestInputConfig(InputConfig):
         default=None,
         description="Where this input is sent: path, query, or body. Default: query (GET) or body (POST).",
     )
+    correlate: Optional[str] = Field(
+        default=None,
+        description=(
+            "Correlation group id. Inputs sharing a correlate group are iterated row-by-row "
+            "(zipped) from the same multi-column databricks query instead of producing a "
+            "cartesian product. Each member must select a column via "
+            "{{ databricks('ref', column='...') }} and share the same query and batch_size."
+        ),
+    )
 
 
 class JWTConfig(BaseModel):
@@ -810,8 +847,18 @@ class AuthConfig(BaseModel):
     )
     issuer: Optional[str] = None  # Required for oauth_jwt
     private_key: Optional[str] = None  # Base64 encoded private key for oauth_jwt
-    bearer_token: Optional[str] = None  # Required for bearer_token auth
+    bearer_token: Optional[str] = (
+        None  # Required for bearer_token auth (unless refresh credentials provided)
+    )
     refresh_token: Optional[str] = None  # Optional for bearer_token (enables auto-refresh)
+    token_request_content_type: Literal["json", "form"] = Field(
+        default="json",
+        description=(
+            "Content type for token refresh requests: 'json' sends application/json "
+            "(request body as JSON), 'form' sends application/x-www-form-urlencoded "
+            "(request body as form data). Most OAuth2 providers expect 'form'."
+        ),
+    )
     header_name: str = "Authorization"  # Name of the auth header
     header_format: str = "Bearer {token}"  # Format string for the auth header value
     jwt_config: Optional[JWTConfig] = None  # JWT-specific settings, required for oauth_jwt
@@ -852,8 +899,14 @@ class AuthConfig(BaseModel):
                 raise ValueError("client_id is required for api_key authentication")
 
         elif self.type == "bearer_token":
-            if not self.bearer_token:
-                raise ValueError("bearer_token is required for bearer_token authentication")
+            has_refresh_credentials = all(
+                [self.token_url, self.client_id, self.client_secret, self.refresh_token]
+            )
+            if not self.bearer_token and not has_refresh_credentials:
+                raise ValueError(
+                    "bearer_token authentication requires either a static bearer_token "
+                    "or all refresh credentials (token_url, client_id, client_secret, refresh_token)"
+                )
 
         return self
 
@@ -1288,6 +1341,64 @@ class ResourceConfig(BaseModel):
         for _name, config in self.request_inputs.items():
             if isinstance(config, RequestInputConfig) and config.location is None:
                 object.__setattr__(config, "location", default_loc)
+        return self
+
+    @model_validator(mode="after")
+    def validate_correlate_groups(self) -> "ResourceConfig":
+        """
+        Validate correlated request-input groups.
+
+        Members of a correlate group are iterated row-by-row (zipped) from a single multi-column
+        databricks query, so they must reference the same query, each select a column, and share
+        the same batch_size (which drives row iteration).
+        """
+        groups: Dict[str, List[str]] = {}
+        for name, config in self.request_inputs.items():
+            correlate = getattr(config, "correlate", None)
+            if correlate:
+                groups.setdefault(correlate, []).append(name)
+
+        for group, names in groups.items():
+            if len(names) < 2:
+                raise ValueError(
+                    f"correlate group '{group}' must contain at least two request inputs; "
+                    f"found {names}"
+                )
+
+            query_refs: set[str] = set()
+            batch_sizes: set[Any] = set()
+            for name in names:
+                config = self.request_inputs[name]
+                refs = config.get_databricks_query_refs()
+                if len(refs) != 1:
+                    raise ValueError(
+                        f"Request input '{name}' in correlate group '{group}' must reference exactly "
+                        "one databricks query via {{ databricks('ref', column='...') }}; "
+                        f"found refs {refs}"
+                    )
+                if config.get_databricks_column() is None:
+                    raise ValueError(
+                        f"Request input '{name}' in correlate group '{group}' must select a column, "
+                        "e.g. {{ databricks('ref', column='col') }}"
+                    )
+                query_refs.add(refs[0])
+                batch_sizes.add(config.batch_size)
+
+            if len(query_refs) != 1:
+                raise ValueError(
+                    f"correlate group '{group}' inputs must reference the same databricks query; "
+                    f"found {sorted(query_refs)}"
+                )
+            if len(batch_sizes) != 1:
+                raise ValueError(
+                    f"correlate group '{group}' inputs must share the same batch_size; "
+                    f"found {sorted(str(b) for b in batch_sizes)}"
+                )
+            if next(iter(batch_sizes)) is None:
+                raise ValueError(
+                    f"correlate group '{group}' inputs must set batch_size; the group drives "
+                    "row-by-row iteration over the query result."
+                )
         return self
 
     @model_validator(mode="after")

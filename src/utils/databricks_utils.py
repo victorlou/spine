@@ -115,18 +115,19 @@ class DatabricksUtils:
 
             """
             Two Cases that can arise here:
-                1. The query is SELECTing a single column, so we should be flattening the List[List] like [[1], [2]] to [1, 2]
-                2. The query is SELECTing multiple columns, so we should be just extending  the List[List] like [[1, 2]], [[3, 4]] to [[1, 2], [3, 4]] (we leave the responsibility of interpreting the multiple columns to the user for use in any downstream logic)
+                1. The query SELECTs a single column, so we flatten the List[List] like [[1], [2]] to [1, 2].
+                2. The query SELECTs multiple columns, so we return a list of row dicts keyed by column name
+                   (e.g. [{"store": "a", "gtin": 1}, ...]) using the result manifest schema. Column names let
+                   downstream features (correlated zip, databricks lookups) reference columns by name. When the
+                   manifest is unavailable, we fall back to row lists so resolution never crashes.
             """
 
-            should_flatten = False
-            if status_response.result.data_array:
-                should_flatten = len(status_response.result.data_array[0]) == 1
+            column_names = self._extract_column_names(status_response)
+            should_flatten = len(status_response.result.data_array[0]) == 1
 
-            if should_flatten:
-                result_data = list(chain.from_iterable(status_response.result.data_array))
-            else:
-                result_data = status_response.result.data_array
+            result_data = self._shape_rows(
+                status_response.result.data_array, should_flatten, column_names
+            )
 
             # Check for additional chunks and retrieve them
             next_chunk_index = getattr(status_response.result, "next_chunk_index", None)
@@ -139,12 +140,13 @@ class DatabricksUtils:
                 )
 
                 if chunk_response.data_array:
-                    if should_flatten:
-                        result_data.extend(
-                            list(chain.from_iterable(chunk_response.data_array))  # pyright: ignore
+                    result_data.extend(
+                        self._shape_rows(
+                            chunk_response.data_array,  # pyright: ignore
+                            should_flatten,
+                            column_names,
                         )
-                    else:
-                        result_data.extend(chunk_response.data_array)  # pyright: ignore
+                    )
 
                 next_chunk_index = getattr(chunk_response, "next_chunk_index", None)
 
@@ -152,3 +154,40 @@ class DatabricksUtils:
 
         except Exception as e:
             raise ValueError(f"Failed to execute Databricks query: {e!s}") from e
+
+    @staticmethod
+    def _extract_column_names(status_response) -> list[str] | None:
+        """
+        Read column names from the statement result manifest schema.
+
+        Returns None when the manifest, schema, or any column name is unavailable so callers
+        can fall back to positional row lists instead of failing.
+        """
+        manifest = getattr(status_response, "manifest", None)
+        schema = getattr(manifest, "schema", None)
+        columns = getattr(schema, "columns", None)
+        if not columns:
+            return None
+
+        names: list[str] = []
+        for column in columns:
+            name = getattr(column, "name", None)
+            if name is None:
+                return None
+            names.append(name)
+        return names
+
+    @staticmethod
+    def _shape_rows(data_array: list, should_flatten: bool, column_names: list[str] | None) -> list:
+        """
+        Shape a raw ``data_array`` chunk into the resolved result form.
+
+        - Single-column queries flatten ``[[v], ...]`` to ``[v, ...]``.
+        - Multi-column queries become row dicts keyed by column name when names are available;
+          otherwise they degrade to row lists.
+        """
+        if should_flatten:
+            return list(chain.from_iterable(data_array))
+        if column_names and data_array and len(column_names) == len(data_array[0]):
+            return [dict(zip(column_names, row, strict=False)) for row in data_array]
+        return [list(row) for row in data_array]

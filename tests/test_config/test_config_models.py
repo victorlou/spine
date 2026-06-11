@@ -622,8 +622,46 @@ def test_auth_config_bearer_token_valid() -> None:
 
 
 def test_auth_config_bearer_token_missing_raises() -> None:
-    with pytest.raises(ValidationError, match="bearer_token"):
+    with pytest.raises(ValidationError, match="bearer_token authentication requires"):
         AuthConfig(type="bearer_token")
+
+
+def test_auth_config_bearer_token_refresh_only_valid() -> None:
+    """All refresh credentials present, no static bearer_token → valid."""
+    auth = AuthConfig(
+        type="bearer_token",
+        token_url="https://auth.example.com/token",
+        client_id="cid",
+        client_secret="csecret",
+        refresh_token="rtok",
+    )
+    assert auth.bearer_token is None
+    assert auth.refresh_token == "rtok"
+
+
+def test_auth_config_bearer_token_partial_refresh_raises() -> None:
+    """Some refresh credentials missing and no static bearer_token → raises."""
+    with pytest.raises(ValidationError, match="bearer_token authentication requires"):
+        AuthConfig(
+            type="bearer_token",
+            token_url="https://auth.example.com/token",
+            client_id="cid",
+            # missing client_secret and refresh_token
+        )
+
+
+def test_auth_config_token_request_content_type_defaults_to_json() -> None:
+    auth = AuthConfig(type="bearer_token", bearer_token="tok")
+    assert auth.token_request_content_type == "json"
+
+
+def test_auth_config_token_request_content_type_form() -> None:
+    auth = AuthConfig(
+        type="bearer_token",
+        bearer_token="tok",
+        token_request_content_type="form",
+    )
+    assert auth.token_request_content_type == "form"
 
 
 # ---------------------------------------------------------------------------
@@ -924,6 +962,107 @@ def test_input_config_get_source_and_filter_config() -> None:
 def test_input_config_get_databricks_query_refs() -> None:
     cfg = InputConfig(value="prefix databricks( 'my_query_ref' ) suffix")
     assert cfg.get_databricks_query_refs() == ["my_query_ref"]
+
+
+def test_input_config_get_databricks_column() -> None:
+    cfg = InputConfig(value="{{ databricks('pairs', column='store') }}")
+    assert cfg.get_databricks_column() == "store"
+    assert InputConfig(value="{{ databricks('pairs') }}").get_databricks_column() is None
+
+
+def test_input_config_get_databricks_source_ref() -> None:
+    cfg = RequestInputConfig(
+        value=ComplexDynamicValue(
+            type=DynamicValueType.SOURCE,
+            source_config=DynamicSourceReference(source="databricks:pairs", field="gtin"),
+        )
+    )
+    assert cfg.get_databricks_source_ref() == "pairs"
+    plain = RequestInputConfig(
+        value=ComplexDynamicValue(
+            type=DynamicValueType.SOURCE,
+            source_config=DynamicSourceReference(source="parent", field="id"),
+        )
+    )
+    assert plain.get_databricks_source_ref() is None
+
+
+def test_resource_config_correlate_group_valid() -> None:
+    cfg = ResourceConfig(
+        method="GET",
+        path="/data",
+        request_inputs={
+            "store": {
+                "value": "{{ databricks('pairs', column='store') }}",
+                "correlate": "pair",
+                "batch_size": 1,
+            },
+            "gtin": {
+                "value": "{{ databricks('pairs', column='gtin') }}",
+                "correlate": "pair",
+                "batch_size": 1,
+            },
+        },
+    )
+    assert cfg.request_inputs["store"].correlate == "pair"
+
+
+def test_resource_config_correlate_group_different_query_refs_raises() -> None:
+    with pytest.raises(ValidationError, match="same databricks query"):
+        ResourceConfig(
+            method="GET",
+            path="/data",
+            request_inputs={
+                "store": {
+                    "value": "{{ databricks('pairs', column='store') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+                "gtin": {
+                    "value": "{{ databricks('other', column='gtin') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+            },
+        )
+
+
+def test_resource_config_correlate_group_requires_batch_size() -> None:
+    with pytest.raises(ValidationError, match="must set batch_size"):
+        ResourceConfig(
+            method="GET",
+            path="/data",
+            request_inputs={
+                "store": {
+                    "value": "{{ databricks('pairs', column='store') }}",
+                    "correlate": "pair",
+                },
+                "gtin": {
+                    "value": "{{ databricks('pairs', column='gtin') }}",
+                    "correlate": "pair",
+                },
+            },
+        )
+
+
+def test_resource_config_correlate_group_requires_column() -> None:
+    with pytest.raises(ValidationError, match="must select a column"):
+        ResourceConfig(
+            method="GET",
+            path="/data",
+            request_inputs={
+                "store": {
+                    "value": "{{ databricks('pairs') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+                "gtin": {
+                    "value": "{{ databricks('pairs', column='gtin') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+            },
+        )
 
 
 def test_input_config_preprocess_unsupported_concat_without_separator_raises() -> None:

@@ -217,6 +217,90 @@ def test_extract_records_and_schema_response_key_non_dict_returns_empty() -> Non
     assert out["records"] == []
 
 
+def test_extract_records_single_item_list_not_re_extracted() -> None:
+    """A list with one item must not have response_key applied again.
+
+    RestService already extracts the response_key before passing data to the
+    parser.  When an account has exactly one campaign the parser receives
+    [{"sub_request_status": "SUCCESS", "campaign": {...}}].  The old code
+    hit the ``len(records) == 1`` branch and tried to find "campaigns" inside
+    that wrapper dict, found nothing, and returned 0 records.
+    """
+    fields = [
+        SchemaField(name="id", source="campaign.id"),
+        SchemaField(name="name", source="campaign.name"),
+    ]
+    parser = SparkParser(
+        config=ResourceConfig(response_key="campaigns", fields=fields),
+        spark=MagicMock(),
+        source_name="snapchat_ads",
+        resource_name="campaigns",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    # Already-extracted list with exactly one item (the campaign wrapper dict)
+    data = [{"sub_request_status": "SUCCESS", "campaign": {"id": "abc-123", "name": "Test"}}]
+    out = parser._extract_records_and_schema(data, None)
+    assert len(out["records"]) == 1
+    assert out["records"][0]["id"] == "abc-123"
+    assert out["records"][0]["name"] == "Test"
+
+
+def test_extract_records_raw_dict_response_key_unwrapped() -> None:
+    """When the parser receives a raw response dict it must still unwrap response_key."""
+    fields = [SchemaField(name="id", source="campaign.id")]
+    parser = SparkParser(
+        config=ResourceConfig(response_key="campaigns", fields=fields),
+        spark=MagicMock(),
+        source_name="snapchat_ads",
+        resource_name="campaigns",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    # Raw full response dict — needs response_key unwrapping
+    data = {
+        "request_status": "SUCCESS",
+        "campaigns": [{"campaign": {"id": "abc-123"}}],
+    }
+    out = parser._extract_records_and_schema(data, None)
+    assert len(out["records"]) == 1
+    assert out["records"][0]["id"] == "abc-123"
+
+
+def test_extract_records_list_wrapped_dict_response_key_unwrapped() -> None:
+    """API returns [{"accounts": [...]}] — a list whose sole element is the wrapper dict.
+
+    RestService only extracts response_key when the top-level response is a dict.
+    When the API itself returns a list, RestService passes it through and the parser
+    must still detect and unwrap the response_key (roundel_ads pattern).
+    """
+    fields = [
+        SchemaField(name="account_id", source="account_id"),
+        SchemaField(name="account_name", source="account_name"),
+    ]
+    parser = SparkParser(
+        config=ResourceConfig(response_key="accounts", fields=fields),
+        spark=MagicMock(),
+        source_name="roundel_ads",
+        resource_name="accounts",
+        execution_plan=_plan(),
+        redis_context=MagicMock(),
+    )
+    # API returned a list; RestService passed it through without extracting
+    data = [
+        {
+            "accounts": [
+                {"account_id": "0014R000038f8hoQAA", "account_name": "Zuru"},
+                {"account_id": "553639716177408000", "account_name": "Zuru - RMS"},
+            ]
+        }
+    ]
+    out = parser._extract_records_and_schema(data, None)
+    assert len(out["records"]) == 2
+    assert out["records"][0]["account_id"] == "0014R000038f8hoQAA"
+    assert out["records"][1]["account_id"] == "553639716177408000"
+
+
 def test_parse_ensure_param_values_skips_when_output_field_missing() -> None:
     ensure_cfg = {"enabled": True, "param_name": "id", "output_field": "missing_col"}
     parser = SparkParser(

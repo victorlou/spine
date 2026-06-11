@@ -13,7 +13,14 @@ from src.config.config_models import (
     SourceType,
 )
 from src.planner.execution_plan import ExecutionPlan, ResourceMetadata
-from src.utils.dynamic_values import ComplexDynamicValue, DynamicSourceReference, DynamicValueType
+from src.utils.dynamic_values import (
+    ComplexDynamicValue,
+    DynamicSourceReference,
+    DynamicValueType,
+    FilterConfig,
+    FilterOperator,
+    FilterValueSource,
+)
 from src.utils.exceptions import PlanningError
 from src.utils.query_utils import format_query_ref_key
 from tests.conftest import make_minimal_pipeline_config, make_rest_chain_resources
@@ -795,3 +802,63 @@ def test_execution_plan_databricks_invalid_sql_raises(tmp_path) -> None:
     )
     with pytest.raises(PlanningError, match="Invalid query content loaded"):
         ExecutionPlan(cfg, redis_context=MagicMock(), selection=None)
+
+
+def _rest_resource_with_databricks_source(query_token: str) -> dict:
+    """REST resource whose SOURCE input looks up a databricks table (no parent resource)."""
+    return {
+        "api": SourceConfig(
+            type=SourceType.REST_API,
+            base_url="https://example.com",
+            enabled=True,
+            resources={
+                "r": ResourceConfig(
+                    enabled=True,
+                    method="GET",
+                    path="/data",
+                    response_type="json",
+                    request_inputs={
+                        "store": RequestInputConfig(value="a", location="query", batch_size=1),
+                        "gtin": RequestInputConfig(
+                            value=ComplexDynamicValue(
+                                type=DynamicValueType.SOURCE,
+                                source_config=DynamicSourceReference(
+                                    source=f"databricks:{query_token}",
+                                    field="gtin",
+                                    filter=FilterConfig(
+                                        field="store",
+                                        operator=FilterOperator.EQUALS,
+                                        value_source=FilterValueSource(input="store"),
+                                        value_type="parameter",
+                                    ),
+                                ),
+                            ),
+                            location="query",
+                        ),
+                    },
+                )
+            },
+        )
+    }
+
+
+def test_execution_plan_databricks_source_resolves_without_dependency(
+    tmp_path, monkeypatch
+) -> None:
+    """A databricks SOURCE lookup runs the query at plan build and adds no resource dependency."""
+    _write_query_file(tmp_path, "q1", "SELECT store, gtin FROM t")
+    cfg = make_minimal_pipeline_config(
+        tmp_path,
+        queries=[QueriesConfig(name="q1", file="q1.sql")],
+        sources=_rest_resource_with_databricks_source("q1"),
+    )
+    mock_du_cls = MagicMock()
+    mock_du_cls.return_value.resolve_databricks_query.return_value = [{"store": "a", "gtin": 1}]
+    monkeypatch.setattr("src.planner.execution_plan.DatabricksUtils", mock_du_cls)
+
+    redis = MagicMock()
+    plan = ExecutionPlan(cfg, redis_context=redis, selection=None)
+
+    mock_du_cls.assert_called()
+    assert redis.store.call_args.kwargs["key"] == format_query_ref_key("q1")
+    assert plan._resource_metadata["api.r"].dependencies == set()

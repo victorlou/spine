@@ -493,6 +493,132 @@ def test_get_filter_value_from_context_returns_none_for_non_parameter_filter() -
     assert out is None
 
 
+def test_get_filter_value_from_context_input_reference() -> None:
+    h = _bare_handler()
+    filter_cfg = SimpleNamespace(
+        value_type="parameter", value_source=FilterValueSource(input="store")
+    )
+    target_cfg = SimpleNamespace(
+        get_source_config=lambda: SimpleNamespace(
+            source="databricks:pairs", field="gtin", filter=filter_cfg
+        )
+    )
+    resource_cfg = SimpleNamespace(request_inputs={"gtin": target_cfg})
+    out = h._get_filter_value_from_context(resource_cfg, "gtin", {"store": ["a"]})
+    assert out == "a"
+
+
+def test_generate_request_contexts_correlated_group_is_zipped() -> None:
+    h = _bare_handler()
+    h.spark = None
+    h.record_limit = None
+
+    resource_cfg = ResourceConfig(
+        method="GET",
+        path="/data",
+        request_inputs={
+            "store": RequestInputConfig(
+                value="{{ databricks('pairs', column='store') }}",
+                correlate="pair",
+                batch_size=1,
+            ),
+            "gtin": RequestInputConfig(
+                value="{{ databricks('pairs', column='gtin') }}",
+                correlate="pair",
+                batch_size=1,
+            ),
+        },
+    )
+    meta = ResourceMetadata(
+        source_name="s",
+        resource_name="r",
+        dependencies=set(),
+        batch_inputs={"store": 1, "gtin": 1},
+        config=resource_cfg,
+    )
+
+    columns = {
+        "store": ["a", "a", "a", "b", "c", "c"],
+        "gtin": [1, 2, 3, 1, 2, 3],
+    }
+    h._resolve_parameter_values_list = lambda **kwargs: columns[kwargs["input_name"]]
+
+    contexts = h._generate_all_request_contexts(
+        resource_meta=meta, service=SimpleNamespace(source_name="s")
+    )
+
+    assert len(contexts) == 6
+    pairs = [(c["store"][0], c["gtin"][0]) for c in contexts]
+    assert pairs == [("a", 1), ("a", 2), ("a", 3), ("b", 1), ("c", 2), ("c", 3)]
+
+
+def _databricks_lookup_source() -> DynamicSourceReference:
+    return DynamicSourceReference(
+        source="databricks:store_gtin_pairs",
+        field="gtin",
+        filter=FilterConfig(
+            field="store",
+            type=FilterType.COLUMN,
+            operator=FilterOperator.EQUALS,
+            value_source=FilterValueSource(input="store"),
+            value_type="parameter",
+        ),
+    )
+
+
+_LOOKUP_ROWS = [
+    {"store": "a", "gtin": 1},
+    {"store": "a", "gtin": 2},
+    {"store": "a", "gtin": 3},
+    {"store": "b", "gtin": 1},
+    {"store": "c", "gtin": 2},
+    {"store": "c", "gtin": 3},
+]
+
+
+def test_extract_databricks_rows_without_spark_filters_and_dedupes() -> None:
+    h = _bare_handler()
+    source_cfg = _databricks_lookup_source()
+
+    assert h._extract_databricks_rows_without_spark(
+        rows=_LOOKUP_ROWS, input_name="gtin", source_config=source_cfg, filter_value="a"
+    ) == [1, 2, 3]
+    assert h._extract_databricks_rows_without_spark(
+        rows=_LOOKUP_ROWS, input_name="gtin", source_config=source_cfg, filter_value="b"
+    ) == [1]
+    assert h._extract_databricks_rows_without_spark(
+        rows=_LOOKUP_ROWS, input_name="gtin", source_config=source_cfg, filter_value="c"
+    ) == [2, 3]
+
+
+def test_resolve_from_databricks_source_reads_cache_without_spark() -> None:
+    h = _bare_handler()
+    h.spark = None
+    h.redis_context.get.return_value = _LOOKUP_ROWS
+    source_cfg = _databricks_lookup_source()
+
+    out = h._resolve_from_databricks_source(
+        input_name="gtin",
+        input_config=RequestInputConfig(value="placeholder"),
+        source_config=source_cfg,
+        filter_value="a",
+    )
+    assert out == [1, 2, 3]
+
+
+def test_resolve_from_databricks_source_missing_cache_raises() -> None:
+    h = _bare_handler()
+    h.spark = None
+    h.redis_context.get.return_value = None
+    with pytest.raises(HandlerError, match="no cached result"):
+        h._resolve_from_databricks_source(
+            input_name="gtin",
+            input_config=RequestInputConfig(value="placeholder"),
+            source_config=_databricks_lookup_source(),
+            filter_value="a",
+        )
+
+
 def test_extract_pagination_info_happy_path_and_missing_required_field() -> None:
     h = _bare_handler()
     cfg = PaginationConfig(page_info_path="meta.page_info")

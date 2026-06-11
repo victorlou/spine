@@ -32,7 +32,11 @@ from src.utils.databricks_utils import DatabricksUtils
 from src.utils.dynamic_values import ComplexDynamicValue, DynamicValueType, FilterConfig
 from src.utils.exceptions import PlanningError
 from src.utils.logger import get_logger
-from src.utils.query_utils import format_query_ref_key, validate_query_content
+from src.utils.query_utils import (
+    format_query_ref_key,
+    is_databricks_source_ref,
+    validate_query_content,
+)
 from src.utils.redis_context import RedisContextManager
 
 
@@ -71,11 +75,19 @@ class ResourceMetadata:
 
         # Compute from input values - only works if all are static lists
         static_count = 1
+        seen_correlate_groups: Set[str] = set()
         for input_name, batch_size in self.batch_inputs.items():
             input_config = self.config.request_inputs.get(input_name)
             if not input_config:
                 # Found a dynamic input - can't estimate
                 return None
+
+            # Correlated inputs are zipped (one shared row count), so count the group once.
+            correlate = getattr(input_config, "correlate", None)
+            if correlate:
+                if correlate in seen_correlate_groups:
+                    continue
+                seen_correlate_groups.add(correlate)
 
             if isinstance(input_config.value, list):
                 values = input_config.value
@@ -339,7 +351,11 @@ class ExecutionPlan:
                     continue
 
                 for input_name, input_config in resource_config.request_inputs.items():
-                    for query_ref in input_config.get_databricks_query_refs():
+                    input_query_refs = list(input_config.get_databricks_query_refs())
+                    source_ref = input_config.get_databricks_source_ref()
+                    if source_ref:
+                        input_query_refs.append(source_ref)
+                    for query_ref in input_query_refs:
                         # Check if the query ref is present in the config queries first
                         if not any(q for q in queries_config if q.name == query_ref):
                             raise PlanningError(
@@ -435,7 +451,9 @@ class ExecutionPlan:
                 # Check request_inputs for source dependencies
                 for _input_name, input_config in resource.request_inputs.items():
                     source_config = input_config.get_source_config()
-                    if source_config:
+                    if source_config and not is_databricks_source_ref(source_config.source):
+                        # Databricks lookups resolve from a cached query, not a parent resource,
+                        # so they create no inter-resource dependency.
                         dep_id = f"{source_name}.{source_config.source}"
                         dependencies.add(dep_id)
                         if resource.enabled or self._should_include_resource(
@@ -553,7 +571,7 @@ class ExecutionPlan:
                     batch_input_sizes[input_name] = batch_size
 
                     source_config = input_config.get_source_config()
-                    if source_config:
+                    if source_config and not is_databricks_source_ref(source_config.source):
                         filter_config = input_config.get_filter_config()
                         if filter_config:
                             filter_relationships[input_name] = filter_config

@@ -46,6 +46,7 @@ Resolved when building requests, headers, parameters, and transformations using 
 | `uuid()` | `{{ uuid() }}` | UUID v4 |
 | `date(op, days?, format?)` | `{{ date('DAYS_AGO', days=1) }}` | Date by operation |
 | `databricks(query_ref)` | `{{ databricks('uk_aus_nz_store_locations') }}` | Query result from Redis/Databricks |
+| `databricks(query_ref, column=...)` | `{{ databricks('store_gtin_pairs', column='store') }}` | Single named column from a multi-column query result |
 | `rsa_sign(key, inputs, algorithm?)` | `{{ rsa_sign(key=env.KEY, inputs=[env.ID, now_ms(), '1']) }}` | RSA signature |
 | `env` | `{{ env.VAR_NAME }}` | Environment variable at runtime |
 
@@ -77,6 +78,18 @@ transformations:
 # RSA signature (requires env vars)
   "WM_SEC.AUTH_SIGNATURE": "{{ rsa_sign(key=env.PRIVATE_KEY_BASE64, inputs=[env.CONSUMER_ID, now_ms(), '1'], algorithm='SHA256') }}"
 ```
+
+### Databricks result shapes
+
+`databricks(query_ref)` returns the cached query result:
+
+- **Single-column** queries flatten to a flat list: `["a", "b", "c"]`.
+- **Multi-column** queries return a list of row dicts keyed by column name:
+  `[{"store": "a", "gtin": 1}, {"store": "a", "gtin": 2}, ...]`.
+
+Use `column=` to project one named column from a multi-column result, preserving row order and
+duplicates: `{{ databricks('store_gtin_pairs', column='gtin') }}` -> `[1, 2, 3, 1, 2, 3]`. This is
+what makes [correlated request inputs](parameters.md#correlated-inputs) align row-by-row.
 
 ## SOURCE Type (Structured Config)
 

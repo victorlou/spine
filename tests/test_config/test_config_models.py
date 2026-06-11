@@ -964,6 +964,107 @@ def test_input_config_get_databricks_query_refs() -> None:
     assert cfg.get_databricks_query_refs() == ["my_query_ref"]
 
 
+def test_input_config_get_databricks_column() -> None:
+    cfg = InputConfig(value="{{ databricks('pairs', column='store') }}")
+    assert cfg.get_databricks_column() == "store"
+    assert InputConfig(value="{{ databricks('pairs') }}").get_databricks_column() is None
+
+
+def test_input_config_get_databricks_source_ref() -> None:
+    cfg = RequestInputConfig(
+        value=ComplexDynamicValue(
+            type=DynamicValueType.SOURCE,
+            source_config=DynamicSourceReference(source="databricks:pairs", field="gtin"),
+        )
+    )
+    assert cfg.get_databricks_source_ref() == "pairs"
+    plain = RequestInputConfig(
+        value=ComplexDynamicValue(
+            type=DynamicValueType.SOURCE,
+            source_config=DynamicSourceReference(source="parent", field="id"),
+        )
+    )
+    assert plain.get_databricks_source_ref() is None
+
+
+def test_resource_config_correlate_group_valid() -> None:
+    cfg = ResourceConfig(
+        method="GET",
+        path="/data",
+        request_inputs={
+            "store": {
+                "value": "{{ databricks('pairs', column='store') }}",
+                "correlate": "pair",
+                "batch_size": 1,
+            },
+            "gtin": {
+                "value": "{{ databricks('pairs', column='gtin') }}",
+                "correlate": "pair",
+                "batch_size": 1,
+            },
+        },
+    )
+    assert cfg.request_inputs["store"].correlate == "pair"
+
+
+def test_resource_config_correlate_group_different_query_refs_raises() -> None:
+    with pytest.raises(ValidationError, match="same databricks query"):
+        ResourceConfig(
+            method="GET",
+            path="/data",
+            request_inputs={
+                "store": {
+                    "value": "{{ databricks('pairs', column='store') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+                "gtin": {
+                    "value": "{{ databricks('other', column='gtin') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+            },
+        )
+
+
+def test_resource_config_correlate_group_requires_batch_size() -> None:
+    with pytest.raises(ValidationError, match="must set batch_size"):
+        ResourceConfig(
+            method="GET",
+            path="/data",
+            request_inputs={
+                "store": {
+                    "value": "{{ databricks('pairs', column='store') }}",
+                    "correlate": "pair",
+                },
+                "gtin": {
+                    "value": "{{ databricks('pairs', column='gtin') }}",
+                    "correlate": "pair",
+                },
+            },
+        )
+
+
+def test_resource_config_correlate_group_requires_column() -> None:
+    with pytest.raises(ValidationError, match="must select a column"):
+        ResourceConfig(
+            method="GET",
+            path="/data",
+            request_inputs={
+                "store": {
+                    "value": "{{ databricks('pairs') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+                "gtin": {
+                    "value": "{{ databricks('pairs', column='gtin') }}",
+                    "correlate": "pair",
+                    "batch_size": 1,
+                },
+            },
+        )
+
+
 def test_input_config_preprocess_unsupported_concat_without_separator_raises() -> None:
     bad_step = PreprocessConfig.model_construct(type=PreprocessorType.CONCAT, separator=None)
     rf = RequestFormatConfig.model_construct(

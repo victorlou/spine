@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 
 def validate_query_content(query_str: str) -> bool:
@@ -98,3 +99,16 @@ def validate_query_content(query_str: str) -> bool:
 def format_query_ref_key(query_ref: str) -> str:
     """Format the query reference key for storage."""
     return f"databricks_query:{query_ref}"
+
+
+DATABRICKS_SOURCE_PREFIX = "databricks:"
+
+
+def is_databricks_source_ref(source: Any) -> bool:
+    """Whether a SOURCE ``source`` string targets a databricks query (``databricks:<ref>``)."""
+    return isinstance(source, str) and source.startswith(DATABRICKS_SOURCE_PREFIX)
+
+
+def parse_databricks_source_ref(source: str) -> str:
+    """Extract the query_ref from a ``databricks:<ref>`` source string."""
+    return source[len(DATABRICKS_SOURCE_PREFIX) :]

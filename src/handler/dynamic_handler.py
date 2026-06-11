@@ -72,6 +72,11 @@ from src.utils.dynamic_values import (
     resolve_request_body,
 )
 from src.utils.exceptions import GracefulShutdownError
+from src.utils.query_utils import (
+    format_query_ref_key,
+    is_databricks_source_ref,
+    parse_databricks_source_ref,
+)
 from src.utils.redis_context import RedisContextManager
 from src.utils.snapshot_poller import (
     SnapshotError,
@@ -652,6 +657,16 @@ class DynamicHandler(BaseHandler):
         """
         # Get parent resource data from Redis
         source_endpoint = f"{source_config.source}"
+
+        # Databricks table lookups: resolve from the cached query result instead of a parent resource.
+        if is_databricks_source_ref(source_endpoint):
+            return self._resolve_from_databricks_source(
+                input_name=input_name,
+                input_config=input_config,
+                source_config=source_config,
+                filter_value=filter_value,
+            )
+
         parent_source_name, parent_resource = self._parse_parent_resource_ref(
             source_endpoint, source_name
         )
@@ -689,6 +704,139 @@ class DynamicHandler(BaseHandler):
                 "type": type(source_data).__name__,
             },
         )
+
+    def _resolve_from_databricks_source(
+        self,
+        input_name: str,
+        input_config: InputConfig,
+        source_config: Any,
+        filter_value: Optional[str] = None,
+    ) -> List[Any]:
+        """
+        Resolve input values from a cached databricks query result (a SOURCE lookup table).
+
+        The query result is a list of row dicts keyed by column name. When Spark is available the
+        rows become a DataFrame so the existing filter + distinct + projection path is reused;
+        otherwise a pure-Python fallback applies the same column filter and projection.
+        """
+        query_ref = parse_databricks_source_ref(source_config.source)
+        redis_key = format_query_ref_key(query_ref)
+        rows = self.redis_context.get(redis_key)
+
+        if rows is None:
+            raise HandlerError(
+                f"Databricks source '{source_config.source}' has no cached result; ensure the "
+                "query ran at plan build",
+                details={"input": input_name, "query_ref": query_ref},
+            )
+
+        if not isinstance(rows, list) or (rows and not isinstance(rows[0], dict)):
+            raise HandlerError(
+                f"Databricks source '{source_config.source}' must be a multi-column query "
+                "(list of row dicts) so columns can be referenced by name",
+                details={"input": input_name, "query_ref": query_ref},
+            )
+
+        if not rows:
+            return []
+
+        if self.spark is not None:
+            df = self.spark.createDataFrame(rows)
+            return self._extract_values_from_dataframe(
+                df=df,
+                input_name=input_name,
+                input_config=input_config,
+                source_config=source_config,
+                filter_value=filter_value,
+            )
+
+        return self._extract_databricks_rows_without_spark(
+            rows=rows,
+            input_name=input_name,
+            source_config=source_config,
+            filter_value=filter_value,
+        )
+
+    def _extract_databricks_rows_without_spark(
+        self,
+        rows: List[Dict[str, Any]],
+        input_name: str,
+        source_config: Any,
+        filter_value: Optional[str] = None,
+    ) -> List[Any]:
+        """Pure-Python column filter + distinct projection for databricks lookups (no Spark)."""
+        field = source_config.field
+        if not field:
+            raise HandlerError(
+                f"No field specified in configuration for input '{input_name}'",
+                details={"input": input_name},
+            )
+
+        filter_config = source_config.filter
+        resolved_filter_value = None
+        if filter_config is not None:
+            if filter_config.type != FilterType.COLUMN:
+                raise HandlerError(
+                    "Databricks source filtering without Spark supports only column filters",
+                    details={"input": input_name, "filter_type": filter_config.type.value},
+                )
+            resolved_filter_value = self._resolve_filter_value(filter_config, filter_value)
+
+        results: List[Any] = []
+        seen: set = set()
+        for row in rows:
+            if filter_config is not None:
+                if filter_config.field not in row:
+                    raise HandlerError(
+                        f"Filter field '{filter_config.field}' not found in databricks source result",
+                        details={"input": input_name, "available_fields": list(row.keys())},
+                    )
+                if not self._cell_matches_filter(
+                    row.get(filter_config.field), filter_config.operator, resolved_filter_value
+                ):
+                    continue
+
+            if field not in row:
+                raise HandlerError(
+                    f"Field '{field}' not found in databricks source result",
+                    details={"input": input_name, "available_fields": list(row.keys())},
+                )
+            value = row[field]
+            if value is None:
+                continue
+            dedupe_key = value if not isinstance(value, (list, dict)) else str(value)
+            if dedupe_key not in seen:
+                seen.add(dedupe_key)
+                results.append(value)
+
+        if len(results) > _MAX_SOURCE_DISTINCT_VALUES:
+            raise HandlerError(
+                f"Databricks source '{source_config.source}' resolved more than "
+                f"{_MAX_SOURCE_DISTINCT_VALUES} values. Add a filter or reduce cardinality.",
+                details={"input": input_name, "max_allowed": _MAX_SOURCE_DISTINCT_VALUES},
+            )
+        return results
+
+    def _cell_matches_filter(self, cell: Any, operator: FilterOperator, value: Any) -> bool:
+        """Evaluate a single column filter for the no-Spark databricks lookup path."""
+        if operator == FilterOperator.EQUALS:
+            return str(cell) == str(value)
+        if operator == FilterOperator.NOT_EQUALS:
+            return str(cell) != str(value)
+        if operator == FilterOperator.IN:
+            seq = value if isinstance(value, (list, tuple, set)) else [value]
+            return cell in seq or str(cell) in {str(x) for x in seq}
+        if operator == FilterOperator.CONTAINS:
+            return isinstance(cell, (list, tuple)) and value in cell
+        if operator == FilterOperator.GREATER_THAN:
+            return cell is not None and cell > value
+        if operator == FilterOperator.LESS_THAN:
+            return cell is not None and cell < value
+        if operator == FilterOperator.GREATER_EQUALS:
+            return cell is not None and cell >= value
+        if operator == FilterOperator.LESS_EQUALS:
+            return cell is not None and cell <= value
+        raise HandlerError(f"Unsupported operator: {operator}")
 
     def _resolve_filter_value(
         self,
@@ -1233,7 +1381,10 @@ class DynamicHandler(BaseHandler):
             date_pairs = [{}]
 
         self._current_value_resolver = get_resolver(self.redis_context)
-        # For each date context, run cartesian product over batch_inputs (if any)
+        correlate_groups = self._get_correlate_groups(resource_meta)
+        expansion_units = self._build_expansion_units(batch_inputs, correlate_groups)
+        # For each date context, run cartesian product over batch_inputs (if any). Correlated
+        # groups are expanded as a single zipped unit instead of being crossed with each other.
         all_contexts: List[Dict[str, Any]] = []
         for date_context in date_pairs:
             if not batch_inputs:
@@ -1242,12 +1393,44 @@ class DynamicHandler(BaseHandler):
             contexts = [date_context]
             prev_input_name = None
 
-            for input_name, batch_size in batch_inputs.items():
+            for unit in expansion_units:
+                new_contexts = []
+
+                if unit["kind"] == "correlate":
+                    for context in contexts:
+                        try:
+                            new_contexts.extend(
+                                self._expand_correlated_group(
+                                    group=unit["group"],
+                                    input_names=unit["inputs"],
+                                    batch_size=unit["batch_size"],
+                                    context=context,
+                                    service=service,
+                                    resource_meta=resource_meta,
+                                )
+                            )
+                        except Exception as e:
+                            self.logger.error(
+                                f"Failed to resolve correlate group {unit['group']}: {e!s}",
+                                extra_fields={
+                                    "group": unit["group"],
+                                    "inputs": unit["inputs"],
+                                    "error": str(e),
+                                    "error_type": type(e).__name__,
+                                },
+                            )
+                    # A correlated group resolves its own columns; it is not a single
+                    # filter source for any following input.
+                    prev_input_name = None
+                    contexts = new_contexts
+                    continue
+
+                input_name = unit["input"]
+                batch_size = unit["batch_size"]
                 input_config = resource_meta.config.request_inputs.get(input_name)
                 if not input_config:
                     self.logger.warning(f"Request input {input_name} not found in request_inputs")
                     continue
-                new_contexts = []
 
                 for context in contexts:
                     try:
@@ -1332,6 +1515,122 @@ class DynamicHandler(BaseHandler):
         )
         return all_contexts
 
+    def _get_correlate_groups(self, resource_meta: ResourceMetadata) -> Dict[str, List[str]]:
+        """
+        Map correlate group id -> ordered list of batched input names in that group.
+
+        Only batched inputs participate in request expansion, so non-batched correlate members
+        (which validation forbids) are ignored here.
+        """
+        groups: Dict[str, List[str]] = {}
+        for input_name in resource_meta.batch_inputs:
+            config = resource_meta.config.request_inputs.get(input_name)
+            group = getattr(config, "correlate", None) if config else None
+            if group:
+                groups.setdefault(group, []).append(input_name)
+        return groups
+
+    def _build_expansion_units(
+        self,
+        batch_inputs: Dict[str, Any],
+        correlate_groups: Dict[str, List[str]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Build ordered expansion units from batch inputs.
+
+        Each unit is either a single input (crossed cartesian-style) or a correlate group
+        (zipped row-by-row). A group is emitted once, at the position of its first member, so
+        ordering relative to independent inputs is preserved.
+        """
+        input_to_group = {
+            name: group for group, names in correlate_groups.items() for name in names
+        }
+        units: List[Dict[str, Any]] = []
+        seen_groups: set[str] = set()
+        for input_name, batch_size in batch_inputs.items():
+            group = input_to_group.get(input_name)
+            if group:
+                if group in seen_groups:
+                    continue
+                seen_groups.add(group)
+                units.append(
+                    {
+                        "kind": "correlate",
+                        "group": group,
+                        "inputs": correlate_groups[group],
+                        "batch_size": batch_size,
+                    }
+                )
+            else:
+                units.append({"kind": "single", "input": input_name, "batch_size": batch_size})
+        return units
+
+    def _expand_correlated_group(
+        self,
+        group: str,
+        input_names: List[str],
+        batch_size: Any,
+        context: Dict[str, Any],
+        service: Any,
+        resource_meta: ResourceMetadata,
+    ) -> List[Dict[str, Any]]:
+        """
+        Expand a correlate group into row-aligned (zipped) contexts.
+
+        Each member resolves to a column list from the same multi-column databricks query, so the
+        lists are row-aligned. Rows are chunked by the shared batch_size; each resulting context
+        carries the per-member column slice for that chunk.
+        """
+        member_values: Dict[str, List[Any]] = {}
+        row_count: Optional[int] = None
+        for input_name in input_names:
+            input_config = resource_meta.config.request_inputs.get(input_name)
+            if not input_config:
+                self.logger.warning(f"Request input {input_name} not found in request_inputs")
+                return []
+            values = self._resolve_parameter_values_list(
+                input_name=input_name,
+                input_config=input_config,
+                source_name=service.source_name,
+                resource_name=resource_meta.resource_name,
+                context=context,
+                filter_value=None,
+                for_batch_expansion=True,
+            )
+            member_values[input_name] = values
+            if row_count is None:
+                row_count = len(values)
+            elif len(values) != row_count:
+                raise HandlerError(
+                    f"correlate group '{group}' columns have mismatched row counts; "
+                    "all members must come from the same query result",
+                    details={
+                        "group": group,
+                        "inputs": input_names,
+                        "row_counts": {name: len(v) for name, v in member_values.items()},
+                    },
+                )
+
+        if not row_count:
+            self.logger.warning(f"No values found for correlate group {group}")
+            return []
+
+        if row_count > _MAX_SOURCE_DISTINCT_VALUES:
+            raise HandlerError(
+                f"correlate group '{group}' would generate more than "
+                f"{_MAX_SOURCE_DISTINCT_VALUES} requests. Reduce the query result size.",
+                details={"group": group, "row_count": row_count},
+            )
+
+        step = row_count if batch_size == BatchSizeMode.ALL else batch_size
+        contexts: List[Dict[str, Any]] = []
+        for start in range(0, row_count, step):
+            new_context = {**context}
+            for input_name in input_names:
+                new_context[input_name] = member_values[input_name][start : start + step]
+            contexts.append(new_context)
+        return contexts
+
     def _extract_filter_value(self, prev_input_name: str, context: Dict[str, Any]) -> Optional[str]:
         """Extract filter value from previous input's context for nested filtering."""
         prev_value = context.get(prev_input_name)
@@ -1348,9 +1647,10 @@ class DynamicHandler(BaseHandler):
         """
         Derive filter_value for an input that has a SOURCE filter with value_type 'parameter'.
 
-        Finds the request input whose source_config matches the filter's value_source
-        (same source and field), then returns that input's value from context (so the
-        parent DataFrame can be filtered by the current request's value, e.g. snapshotId).
+        Returns the referenced value from context so the parent/lookup data can be filtered by
+        the current request's value. The filter's value_source may reference another request input
+        directly by name (``input``), or another resource field (``source`` + ``field``), in which
+        case the matching request input's value is used.
         """
         input_config = resource_config.request_inputs.get(input_name)
         if not input_config:
@@ -1364,6 +1664,12 @@ class DynamicHandler(BaseHandler):
         value_source = getattr(filter_config, "value_source", None)
         if not isinstance(value_source, FilterValueSource):
             return None
+        # Direct reference to another request input by name (used by databricks lookups).
+        if value_source.input:
+            raw = context.get(value_source.input)
+            if isinstance(raw, list) and raw:
+                return str(raw[0]) if raw[0] is not None else None
+            return str(raw) if raw is not None else None
         # Find input in this resource whose source_config matches value_source (source + field)
         for name, pconfig in resource_config.request_inputs.items():
             sc = pconfig.get_source_config()

@@ -127,10 +127,6 @@ class DynamicHandler(BaseHandler):
         self.config = settings.pipeline_config
         self.record_limit = record_limit
         self.backfill_mode = backfill_mode
-        # Original (unresolved) header templates per resource, captured before the
-        # first batch resolves them. Re-resolving from these each batch keeps
-        # time-sensitive values (now_ms()/rsa_sign) fresh instead of frozen.
-        self._original_header_templates: Dict[str, Dict[str, Any]] = {}
         self.spark_manager = None
         self.spark: SparkSession | None = None
         self._telemetry = TelemetryManager()

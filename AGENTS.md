@@ -63,6 +63,8 @@ Spine is a configuration-first ingestion framework. Treat it like production pip
 - Use `docs/getting-started.md`, `docs/deployment.md`, and `docs/configuration/` as the source of truth for setup and behavior details.
 - GHCR image tags (`latest`, rolling `dev`, short-lived `dev-<short_sha>` traces, `v*`), PR Docker path gates, promotion smoke, and registry cleanup live in `docs/deployment.md`, `docker/README.md`, and `docs/development.md`; update them when CI or publishing behavior changes.
 - Write for someone discovering the project for the first time. Prefer direct, timeless descriptions of behavior and configuration. Avoid framing docs around past releases or repo history (for example “unchanged from earlier versions”, “previously”, “now you can”) unless you are explicitly documenting a breaking migration or upgrade path.
+- **Do not hard-wrap Markdown prose.** Write one line per paragraph and one line per list item; never break a sentence across lines to hit a column width. Insert a line break only where the break is meaningful — a new paragraph, list item, table row, or fenced code. This matches the existing `docs/` and `README.md` style and keeps diffs and rendered output clean.
+- The documentation site is MkDocs + Material: `docs/` stays pure Markdown, all site chrome (templates, CSS, JS, fonts, brand assets) lives under `theme/`, and it publishes to GitHub Pages on merge to `main` via `.github/workflows/pages.yml`. Validate with `uv run --group docs mkdocs build --strict`. See `docs/development.md` (Documentation site) and `theme/README.md`.
 
 ## GitHub issues
 

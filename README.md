@@ -1,6 +1,9 @@
 # Spine
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-victorlou.github.io%2Fspine-0B0E15.svg)](https://victorlou.github.io/spine/)
+
+**📖 Documentation: [victorlou.github.io/spine](https://victorlou.github.io/spine/)**
 
 **Spine is a configuration-first ingestion framework for teams that are tired of rebuilding the same ingestion logic for every new source, table, and destination.**
 

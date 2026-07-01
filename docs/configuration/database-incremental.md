@@ -128,4 +128,4 @@ resources:
 ## See also
 
 - [Configuration overview — Database resources](overview.md#database-resources-and-request-contexts) — request contexts, **`database_where_predicate`**, **`database_select_query`**.
-- [`AGENTS.md`](../../AGENTS.md) — contributor map for handler and JDBC SQL helpers.
+- [`AGENTS.md`](https://github.com/victorlou/spine/blob/main/AGENTS.md) — contributor map for handler and JDBC SQL helpers.

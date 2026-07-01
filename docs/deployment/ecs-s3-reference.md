@@ -176,5 +176,5 @@ Use the AWS console, CloudFormation, CDK, Terraform, or any other approach—the
 
 ## Related documentation
 
-- [Deployment overview](deployment.md) — Docker, CI, GHCR, runtime env vars.
+- [Deployment overview](../deployment.md) — Docker, CI, GHCR, runtime env vars.
 - [Configuration overview](../configuration/overview.md) — `CONFIG_PATH` and directory layout.

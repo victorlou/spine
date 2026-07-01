@@ -15,8 +15,8 @@
   - [Append](#append)
   - [Merge (Upsert)](#merge-upsert)
   - [Iceberg](#iceberg)
-  - [Append](#append-1)
-  - [Overwrite](#overwrite-1)
+  - [Append](#append_1)
+  - [Overwrite](#overwrite_1)
   - [Merge](#merge)
   - [Current Iceberg limitations](#current-iceberg-limitations)
 - [Quick reference](#quick-reference)
@@ -25,7 +25,7 @@
 
 ## Destinations
 
-Loading uses Spark with Hadoop `FileSystem` URIs. Use **`destination: local`** with **`storage_root`** and **`prefix`** to write under a local directory as `file://` URIs, or cloud destinations (`s3`, `gcs`, `blob`) with destination-specific bucket/container fields and **`prefix`**. If your `defaults.yml` omits a `defaults.loading` block entirely, Spine applies a built-in default of **`destination: local`** with relative **`storage_root: ".spine/local-output"`** (resolved under the **repository root**—the directory that contains `src/`—so in a normal checkout it lands next to `config/`) and a placeholder **`prefix`**; copy [`config/defaults.example.yml`](../../config/defaults.example.yml) for an explicit starting point.
+Loading uses Spark with Hadoop `FileSystem` URIs. Use **`destination: local`** with **`storage_root`** and **`prefix`** to write under a local directory as `file://` URIs, or cloud destinations (`s3`, `gcs`, `blob`) with destination-specific bucket/container fields and **`prefix`**. If your `defaults.yml` omits a `defaults.loading` block entirely, Spine applies a built-in default of **`destination: local`** with relative **`storage_root: ".spine/local-output"`** (resolved under the **repository root**—the directory that contains `src/`—so in a normal checkout it lands next to `config/`) and a placeholder **`prefix`**; copy [`config/defaults.example.yml`](https://github.com/victorlou/spine/blob/main/config/defaults.example.yml) for an explicit starting point.
 
 Credentials and connectors follow your Spark deployment (for example IAM on AWS, or Hadoop `fs.*` settings for other schemes).
 
@@ -240,7 +240,7 @@ Filesystem helpers for loaders live under **`src/loader/`** (for example `object
 
 ## Spark Runtime Readiness
 
-Spine composes Spark connector packages and Hadoop filesystem settings from the effective destination set in your selected pipeline config and from **`defaults.spark_runtime`** (see [`config/defaults.example.yml`](../../config/defaults.example.yml)).
+Spine composes Spark connector packages and Hadoop filesystem settings from the effective destination set in your selected pipeline config and from **`defaults.spark_runtime`** (see [`config/defaults.example.yml`](https://github.com/victorlou/spine/blob/main/config/defaults.example.yml)).
 
 | Destination | Required loading fields | Spark connector expectation | Auth expectation |
 |-------------|-------------------------|-----------------------------|------------------|
@@ -274,4 +274,4 @@ Spine probes every effective loading destination immediately after the Spark ses
 
 `--validate-only` runs the same code path with `write_probe=True`, additionally writing and deleting a temporary marker object under each destination to confirm write permissions. Local destinations rely on `src/loader/local_storage.py` (existence + `os.W_OK`) which already covers writability without a marker file.
 
-The preflight is the single source of truth for *can we reach this destination*. Spine does not ship per-cloud Python SDK validators; do not add `google-cloud-storage`, `azure-storage-blob`, or similar runtime checks. Extend [`src/loader/destination_preflight.py`](../../src/loader/destination_preflight.py) (or its caller in [`src/handler/dynamic_handler.py`](../../src/handler/dynamic_handler.py)) when symmetric coverage is needed for new destinations.
+The preflight is the single source of truth for *can we reach this destination*. Spine does not ship per-cloud Python SDK validators; do not add `google-cloud-storage`, `azure-storage-blob`, or similar runtime checks. Extend [`src/loader/destination_preflight.py`](https://github.com/victorlou/spine/blob/main/src/loader/destination_preflight.py) (or its caller in [`src/handler/dynamic_handler.py`](https://github.com/victorlou/spine/blob/main/src/handler/dynamic_handler.py)) when symmetric coverage is needed for new destinations.

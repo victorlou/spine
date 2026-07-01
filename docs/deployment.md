@@ -16,11 +16,11 @@ Copy pipeline config from the templates under `config/`, set up a repo-root `.en
 docker-compose up --build
 ```
 
-For full details (CLI args, Apple Silicon), see [docker/README.md](../docker/README.md).
+For full details (CLI args, Apple Silicon), see [docker/README.md](https://github.com/victorlou/spine/blob/main/docker/README.md).
 
 ## CI and container images (GitHub Actions)
 
-Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, and on **`v*`** tag pushes, via [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, and on **`v*`** tag pushes, via [.github/workflows/ci.yml](https://github.com/victorlou/spine/blob/main/.github/workflows/ci.yml).
 
 **GHCR publishes** a multi-arch image (`linux/amd64`, `linux/arm64`) on pushes to **`main`** (`latest` + SHA metadata), **`dev`** (mutable **`dev`** plus **`dev-<short_sha>`** traces), and **`v*`** tags. Multi-arch manifests explain multiple digests per logical tag.
 
@@ -28,7 +28,7 @@ Linting and tests run on pushes and pull requests to **`dev`** and **`main`**, a
 
 **Branch protection:** add **`dev-image-smoke`** as a required check for **`main`** if merges should be blocked when it fails (Settings → rules / branch protection).
 
-**Cleanup** ([`.github/workflows/ghcr-cleanup.yml`](../.github/workflows/ghcr-cleanup.yml)): weekly job keeps **`latest`**, **`dev`**, **`v*`**, then the **three newest** package versions that carry **`dev-<short_sha>`** but **not** the rolling **`dev`** tag; a follow-up step keeps **5** other tagged versions and drops untagged (`keep-n-tagged` / `keep-n-untagged` in the workflow).
+**Cleanup** ([`.github/workflows/ghcr-cleanup.yml`](https://github.com/victorlou/spine/blob/main/.github/workflows/ghcr-cleanup.yml)): weekly job keeps **`latest`**, **`dev`**, **`v*`**, then the **three newest** package versions that carry **`dev-<short_sha>`** but **not** the rolling **`dev`** tag; a follow-up step keeps **5** other tagged versions and drops untagged (`keep-n-tagged` / `keep-n-untagged` in the workflow).
 
 ```bash
 docker buildx imagetools inspect ghcr.io/victorlou/spine:latest

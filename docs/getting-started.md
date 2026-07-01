@@ -50,7 +50,7 @@ docker run --rm -v "$(pwd)/.env:/.env:ro" -v "$(pwd)/config:/config:ro" spine --
 
 **Apple Silicon (M1/M2)**: Published GHCR images are multi-arch, so pull directly by tag. Add `--platform linux/amd64` only when you explicitly need x86_64 emulation.
 
-See [docker/README.md](../docker/README.md) for more Docker details.
+See [docker/README.md](https://github.com/victorlou/spine/blob/main/docker/README.md) for more Docker details.
 
 ---
 

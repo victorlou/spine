@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+<!-- Spine: brand favicons, app icons, and theme color -->
+{% block extrahead %}
+  <link rel="icon" type="image/svg+xml" href="{{ 'assets/favicon/favicon.svg' | url }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ 'assets/favicon/favicon-32.png' | url }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ 'assets/favicon/favicon-16.png' | url }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ 'assets/favicon/apple-touch-icon-180.png' | url }}">
+  <link rel="manifest" href="{{ 'assets/favicon/site.webmanifest' | url }}">
+  <meta name="theme-color" content="#0B0E15">
+  {% if page and page.meta and page.meta.title %}
+    <meta property="og:title" content="{{ page.meta.title }}">
+  {% endif %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Spine">
+  <meta property="og:description" content="{{ config.site_description }}">
+{% endblock %}

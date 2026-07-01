@@ -1,0 +1,143 @@
+# Spine documentation site — built with MkDocs + Material.
+# Local preview:  uv run --group docs mkdocs serve
+# Strict build:   uv run --group docs mkdocs build --strict
+site_name: Spine
+site_description: >-
+  Spine is a configuration-first ingestion framework — one execution model,
+  one config shape, and clear extension points for services, parsers,
+  collectors, and loaders.
+site_author: Spine
+site_url: https://victorlou.github.io/spine/
+
+repo_name: victorlou/spine
+repo_url: https://github.com/victorlou/spine
+edit_uri: edit/main/docs/
+
+copyright: >-
+  Spine — configuration-first ingestion. MIT licensed. IBM Plex under the SIL Open Font License.
+
+docs_dir: docs
+# Build output is disposable; keep it out of the repo root under the ignored .tmp/.
+site_dir: .tmp/site
+
+theme:
+  # All site chrome (templates + static assets) lives under theme/ (custom_dir),
+  # keeping docs/ as pure Markdown. Asset paths below resolve inside theme/.
+  name: material
+  custom_dir: theme
+  language: en
+  # Fonts are self-hosted (IBM Plex woff2 in theme/assets/fonts) — disable Google Fonts.
+  font: false
+  logo: assets/brand/spine-mark-ice.svg
+  favicon: assets/favicon/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  # Two schemes only. First visit follows the OS preference (via the media queries);
+  # the toggle then flips between light and dark and remembers the choice.
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+    - search.share
+
+extra_css:
+  - assets/fonts/fonts.css
+  - assets/stylesheets/spine.css
+
+extra_javascript:
+  - assets/javascripts/spine.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/victorlou/spine
+      name: Spine on GitHub
+  generator: false
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+      minify_css: true
+      minify_js: true
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Anchor link to this section
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Fail the build on any bad internal reference (acceptance criterion:
+# no broken internal links under strict validation).
+validation:
+  omitted_files: warn
+  absolute_links: info
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Configuration:
+      - Overview: configuration/overview.md
+      - Parameters: configuration/parameters.md
+      - Value Resolution: configuration/value-resolution.md
+      - Authentication: configuration/auth.md
+      - Loading: configuration/loading.md
+      - Transformations: configuration/transformations.md
+      - Backfill: configuration/backfill.md
+      - Database Incremental: configuration/database-incremental.md
+      - Telemetry: configuration/telemetry.md
+  - Load Strategies: load_strategy/README.md
+  - Deployment:
+      - Overview: deployment.md
+      - ECS + S3 Reference: deployment/ecs-s3-reference.md
+  - Development: development.md

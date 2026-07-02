@@ -15,8 +15,8 @@
   - [Append](#append)
   - [Merge (Upsert)](#merge-upsert)
   - [Iceberg](#iceberg)
-  - [Append](#append_1)
-  - [Overwrite](#overwrite_1)
+  - [Append](#iceberg-append)
+  - [Overwrite](#iceberg-overwrite)
   - [Merge](#merge)
   - [Current Iceberg limitations](#current-iceberg-limitations)
 - [Quick reference](#quick-reference)
@@ -175,7 +175,7 @@ Spine resolves the final table location from the warehouse root plus the configu
 
 Iceberg table existence is checked through the Spark catalog using that derived table identifier, not by looking directly for metadata files in object storage.
 
-### Append
+### Iceberg append
 
 Append writes add rows to the existing Iceberg table, creating the table on first write when it does not already exist.
 
@@ -188,7 +188,7 @@ loading:
   prefix: "source/resource"
 ```
 
-### Overwrite
+### Iceberg overwrite
 
 Overwrite replaces the contents of the target Iceberg table.
 

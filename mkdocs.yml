@@ -80,7 +80,14 @@ plugins:
   - minify:
       minify_html: true
       minify_css: true
+      # CSS/JS minification only applies to files listed here (Material's own
+      # assets already ship minified); keep in sync with extra_css/extra_javascript.
+      css_files:
+        - assets/fonts/fonts.css
+        - assets/stylesheets/spine.css
       minify_js: true
+      js_files:
+        - assets/javascripts/spine.js
 
 markdown_extensions:
   - abbr

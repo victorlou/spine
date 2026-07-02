@@ -5,14 +5,24 @@ document.addEventListener("click", function (event) {
   if (!btn) return;
   const target = document.querySelector(btn.getAttribute("data-copy"));
   if (!target) return;
+
+  // Clipboard API is unavailable on non-secure (plain HTTP, non-localhost) origins.
+  if (!navigator.clipboard || !navigator.clipboard.writeText) return;
+
   const text = target.textContent.trim();
   navigator.clipboard.writeText(text).then(function () {
+    // Stash the pristine label once so overlapping clicks can't latch "Copied".
+    if (!btn.dataset.label) {
+      btn.dataset.label = btn.getAttribute("aria-label") || "Copy command";
+    }
+    if (btn._resetTimer) clearTimeout(btn._resetTimer);
     btn.classList.add("spine-copied");
-    const original = btn.getAttribute("aria-label");
     btn.setAttribute("aria-label", "Copied");
-    setTimeout(function () {
+    btn._resetTimer = setTimeout(function () {
       btn.classList.remove("spine-copied");
-      btn.setAttribute("aria-label", original || "Copy command");
+      btn.setAttribute("aria-label", btn.dataset.label);
     }, 1400);
+  }).catch(function () {
+    // Permission denied or blocked by policy — fail quietly rather than throw.
   });
 });

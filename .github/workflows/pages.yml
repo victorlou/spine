@@ -1,0 +1,61 @@
+name: Pages
+
+# Build the MkDocs site and deploy it to GitHub Pages on every push to main.
+# PR validation (strict build, no deploy) lives in ci.yml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "theme/**"
+      - ".github/workflows/pages.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+# Least-privilege token scoped to publishing Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; let an in-progress run finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # Only the docs toolchain — MkDocs never imports the ingestion runtime.
+      - name: Install docs dependencies
+        run: uv sync --frozen --only-group docs
+
+      - name: Build site (strict)
+        run: uv run --no-sync mkdocs build --strict
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .tmp/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

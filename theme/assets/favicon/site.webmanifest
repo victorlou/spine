@@ -1,0 +1,11 @@
+{
+  "name": "Spine",
+  "short_name": "Spine",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "theme_color": "#0B0E15",
+  "background_color": "#0B0E15",
+  "display": "standalone"
+}

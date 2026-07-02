@@ -1,0 +1,227 @@
+{% extends "main.html" %}
+
+<!--
+  Spine landing page. Rendered for docs/index.md (template: home.html).
+  The hero + sections replace the standard Material article; the docs nav,
+  search, and footer come from the parent theme.
+-->
+
+{% block tabs %}
+{{ super() }}
+
+<div class="spine-landing">
+
+  <!-- ============================ HERO ============================ -->
+  <header class="spine-hero">
+    <div class="spine-wrap">
+      <div class="spine-hero__mark" role="img" aria-label="Spine mark">
+        <!-- Entrance: assemble one-shot (1.5s), then crossfades into the idle loop. -->
+        <div class="spine-mark-enter">{% include "partials/hero-mark-assemble.svg" %}</div>
+        <div class="spine-mark-live">{% include "partials/hero-mark.svg" %}</div>
+      </div>
+
+      <span class="spine-eyebrow spine-hero__eyebrow">Configuration-first ingestion</span>
+      <h1 class="spine-hero__title">
+        Stop rebuilding the<br>same pipeline.
+        <span class="spine-accent">Give it a spine.</span>
+      </h1>
+      <p class="spine-hero__sub">
+        One execution model. One config shape. Clear extension points for services,
+        parsers, collectors, and loaders — so auth, retries, pagination, backfill,
+        and loading stop getting rewritten for every new source.
+      </p>
+
+      <div class="spine-cta">
+        <a class="spine-btn spine-btn--primary" href="{{ 'getting-started/' | url }}">
+          Get started
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="spine-btn spine-btn--ghost" href="{{ config.repo_url }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.09.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.36-3.37-1.36-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.36 9.36 0 015 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          Star on GitHub
+        </a>
+      </div>
+
+      <div class="spine-install">
+        <span class="spine-prompt">$</span>
+        <code id="spine-install-cmd">docker compose up --build</code>
+        <button class="spine-copy" type="button" data-copy="#spine-install-cmd" aria-label="Copy command">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9V5a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2h-4M5 9h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== PROBLEM -> SPINE ==================== -->
+  <section class="spine-section">
+    <div class="spine-wrap">
+      <div class="spine-section__head">
+        <span class="spine-eyebrow">The drift</span>
+        <h2 class="spine-section__title">Every source becomes a special case.</h2>
+        <p class="spine-section__lead">
+          Getting data out of one API once is easy. Doing it the same way across
+          many sources, keeping it reliable in production, and not minting a new
+          one-off every time is the hard part.
+        </p>
+      </div>
+      <div class="spine-split">
+        <div class="spine-panel spine-panel--muted spine-panel--before">
+          <h3>Without a spine</h3>
+          <ul class="spine-list">
+            <li><span class="spine-glyph">×</span> One-off scripts only one person trusts</li>
+            <li><span class="spine-glyph">×</span> Different auth, retry &amp; pagination per source</li>
+            <li><span class="spine-glyph">×</span> Config scattered across code, notebooks, and glue</li>
+            <li><span class="spine-glyph">×</span> Pipelines that break on backfills and new destinations</li>
+          </ul>
+        </div>
+        <div class="spine-panel spine-panel--after">
+          <h3>With Spine</h3>
+          <ul class="spine-list">
+            <li><span class="spine-glyph">→</span> Pipelines defined in YAML, validated up front</li>
+            <li><span class="spine-glyph">→</span> One service / parser / loader shape every time</li>
+            <li><span class="spine-glyph">→</span> A real execution plan with dependency resolution</li>
+            <li><span class="spine-glyph">→</span> Retries, backfills &amp; failure isolation per resource</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== FEATURES ==================== -->
+  <section class="spine-section spine-section--tint spine-section--center">
+    <div class="spine-wrap">
+      <div class="spine-section__head">
+        <span class="spine-eyebrow">What it is</span>
+        <h2 class="spine-section__title">A runtime, not a connector marketplace.</h2>
+        <p class="spine-section__lead">
+          Modular by design: clear extension points for services, handlers,
+          parsers, collectors, and loaders — swap a part without a rewrite.
+        </p>
+      </div>
+      <div class="spine-features">
+        <div class="spine-feature">
+          <div class="spine-feature__icon"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round"/></svg></div>
+          <h3>Configuration-driven</h3>
+          <p>YAML-based sources, resources, defaults, and queries. Define pipelines; don't hand-write them.</p>
+        </div>
+        <div class="spine-feature">
+          <div class="spine-feature__icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/><path d="M11 7h4a2 2 0 012 2v4" stroke-linecap="round"/></svg></div>
+          <h3>Modular architecture</h3>
+          <p>Clear seams for services, handlers, parsers, collectors, and loaders — swap parts without a rewrite.</p>
+        </div>
+        <div class="spine-feature">
+          <div class="spine-feature__icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M6 8v2a2 2 0 002 2h8a2 2 0 002-2V8M12 12v3.5" stroke-linecap="round"/></svg></div>
+          <h3>Execution planning</h3>
+          <p>Dependency resolution and optimized ordering, so staged runs happen in the right sequence.</p>
+        </div>
+        <div class="spine-feature">
+          <div class="spine-feature__icon"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 4.5-3.2 7.5-8 9-4.8-1.5-8-4.5-8-9V7l8-4z" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <h3>Resilient execution</h3>
+          <p>Validation up front, retries, backfills, and failure isolation per source and resource.</p>
+        </div>
+        <div class="spine-feature">
+          <div class="spine-feature__icon"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-linecap="round"/><circle cx="12" cy="12" r="8.5"/></svg></div>
+          <h3>Extensible design</h3>
+          <p>Add sources, auth methods, loaders, and transformations without inventing a new flow.</p>
+        </div>
+        <div class="spine-feature">
+          <div class="spine-feature__icon"><svg viewBox="0 0 24 24"><path d="M4 6h16M7 12h13M10 18h10" stroke-linecap="round"/><circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.5" cy="18" r="1.3" fill="currentColor" stroke="none"/></svg></div>
+          <h3>Flexible inputs</h3>
+          <p>Path, query, body, and dynamic parameters — dates, upstream data, and correlated inputs.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== CODE SHOWCASE ==================== -->
+  <section class="spine-section">
+    <div class="spine-wrap">
+      <div class="spine-showcase">
+        <div>
+          <span class="spine-eyebrow">The config contract</span>
+          <h2 class="spine-section__title">Describe the pipeline. Spine runs it.</h2>
+          <p class="spine-section__lead">
+            A source, its resources, and where they load — declared once, validated
+            before anything runs. The same shape whether it's a REST API or a
+            relational database.
+          </p>
+          <div class="spine-cta" style="justify-content:flex-start;margin-top:1.5rem">
+            <a class="spine-btn spine-btn--ghost" href="{{ 'configuration/overview/' | url }}">Read the config guide</a>
+          </div>
+        </div>
+        <div class="spine-code" aria-hidden="true">
+          <div class="spine-code__bar">
+            <span class="spine-code__dot"></span><span class="spine-code__dot"></span><span class="spine-code__dot"></span>
+            <span class="spine-code__name">config/sources/jsonplaceholder.yml</span>
+          </div>
+<pre><span class="c-key">source</span>:
+  <span class="c-key">name</span>: <span class="c-str">jsonplaceholder</span>
+  <span class="c-key">type</span>: <span class="c-str">rest</span>
+  <span class="c-key">base_url</span>: <span class="c-str">https://jsonplaceholder.typicode.com</span>
+  <span class="c-key">auth</span>: <span class="c-str">none</span>
+
+<span class="c-key">resources</span>:
+  <span class="c-dash">-</span> <span class="c-key">name</span>: <span class="c-str">posts</span>
+    <span class="c-key">path</span>: <span class="c-str">/posts</span>
+    <span class="c-key">retries</span>: <span class="c-num">3</span>
+    <span class="c-key">loader</span>:
+      <span class="c-key">destination</span>: <span class="c-str">local</span>
+      <span class="c-key">format</span>: <span class="c-str">delta</span>
+      <span class="c-key">write_mode</span>: <span class="c-str">merge</span>
+      <span class="c-cmt"># validated before the run starts</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== HOW IT RUNS ==================== -->
+  <section class="spine-section spine-section--tint">
+    <div class="spine-wrap">
+      <div class="spine-section__head">
+        <span class="spine-eyebrow">The execution model</span>
+        <h2 class="spine-section__title">One flow, every source.</h2>
+      </div>
+      <div class="spine-steps">
+        <div class="spine-step">
+          <div class="spine-step__num"></div>
+          <div><h3>Define</h3><p>Sources, resources, defaults, and queries as YAML under <code>config/</code>.</p></div>
+        </div>
+        <div class="spine-step">
+          <div class="spine-step__num"></div>
+          <div><h3>Validate</h3><p>Config shape and runtime assumptions are checked up front — fail early, not mid-run.</p></div>
+        </div>
+        <div class="spine-step">
+          <div class="spine-step__num"></div>
+          <div><h3>Plan</h3><p>Dependencies resolve into a staged execution plan with the right order.</p></div>
+        </div>
+        <div class="spine-step">
+          <div class="spine-step__num"></div>
+          <div><h3>Run</h3><p>The same service, parser, collector, and loader patterns extract, transform, and load — every time.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== FINAL CTA ==================== -->
+  <section class="spine-section">
+    <div class="spine-wrap">
+      <div class="spine-final">
+        <span class="spine-eyebrow">Start here</span>
+        <h2>Start with one source.</h2>
+        <p>Clone it, point it at a source, and let the same runtime handle the rest.</p>
+        <div class="spine-cta">
+          <a class="spine-btn spine-btn--primary" href="{{ 'getting-started/' | url }}">Read the docs</a>
+          <a class="spine-btn spine-btn--ghost" href="{{ config.repo_url }}">View source</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+<!-- Empty the normal article body: the landing lives entirely in the tabs block -->
+{% block content %}{% endblock %}
+
+<!-- Hide the standard site header actions overlap; keep footer from parent -->
+{% block container %}{{ super() }}{% endblock %}

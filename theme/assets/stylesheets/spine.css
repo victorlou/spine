@@ -1,0 +1,502 @@
+/* =========================================================================
+   Spine — brand layer over MkDocs Material
+   Monochrome cool-neutral ramp (Abyss #0B0E15 -> Glacier #E9EFF4),
+   IBM Plex typography. No accent color (reserved for a later phase).
+   ========================================================================= */
+
+:root {
+  /* Brand ramp (from color/palette.css) */
+  --spine-ink:   #0B0E15;
+  --spine-900:   #11151D;
+  --spine-800:   #1A2029;
+  --spine-700:   #2E3742;
+  --spine-600:   #47515F;
+  --spine-500:   #647082;
+  --spine-400:   #8B99AA;
+  --spine-300:   #B4C0CE;
+  --spine-200:   #D3DCE6;
+  --spine-ice:   #E9EFF4;
+  --spine-frost: #F4F8FB;
+
+  /* Type */
+  --md-text-font: "IBM Plex Sans";
+  --md-code-font: "IBM Plex Mono";
+
+  --spine-radius: 14px;
+  --spine-radius-sm: 10px;
+}
+
+/* -------------------------------------------------------------------------
+   Palette — Light (default)
+   ------------------------------------------------------------------------- */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        var(--spine-ink);
+  --md-primary-fg-color--light: var(--spine-700);
+  --md-primary-fg-color--dark:  var(--spine-ink);
+  --md-primary-bg-color:        var(--spine-ice);
+  --md-primary-bg-color--light: var(--spine-300);
+
+  --md-accent-fg-color:         var(--spine-600);
+  --md-accent-fg-color--transparent: rgba(71, 81, 95, 0.1);
+
+  --md-default-bg-color:        var(--spine-frost);
+  --md-default-fg-color:        var(--spine-ink);
+  --md-default-fg-color--light: var(--spine-600);
+  --md-default-fg-color--lighter: var(--spine-400);
+  --md-default-fg-color--lightest: rgba(11, 14, 21, 0.05);
+
+  --md-typeset-color:           var(--spine-700);
+  --md-typeset-a-color:         var(--spine-ink);
+
+  --md-code-bg-color:           #eef3f8;
+  --md-code-fg-color:           var(--spine-800);
+
+  --md-footer-bg-color:         var(--spine-ink);
+  --md-footer-bg-color--dark:   #070a0f;
+
+  --spine-surface:              #ffffff;
+  --spine-border:               var(--spine-200);
+  --spine-muted:                var(--spine-500);
+  --spine-grid: rgba(11, 14, 21, 0.045);
+}
+
+/* -------------------------------------------------------------------------
+   Palette — Dark (slate)
+   ------------------------------------------------------------------------- */
+[data-md-color-scheme="slate"] {
+  --md-hue: 220;
+  --md-primary-fg-color:        var(--spine-900);
+  --md-primary-fg-color--light: var(--spine-700);
+  --md-primary-fg-color--dark:  var(--spine-ink);
+  --md-primary-bg-color:        var(--spine-ice);
+
+  --md-accent-fg-color:         var(--spine-300);
+
+  --md-default-bg-color:        var(--spine-ink);
+  --md-default-fg-color:        var(--spine-ice);
+  --md-default-fg-color--light: var(--spine-300);
+  --md-default-fg-color--lighter: var(--spine-400);
+  --md-default-fg-color--lightest: rgba(233, 239, 244, 0.07);
+
+  --md-typeset-color:           var(--spine-300);
+  --md-typeset-a-color:         var(--spine-ice);
+
+  --md-code-bg-color:           #0f131b;
+  --md-code-fg-color:           var(--spine-200);
+
+  --md-footer-bg-color:         #070a0f;
+  --md-footer-bg-color--dark:   #05070b;
+
+  --spine-surface:              var(--spine-900);
+  --spine-border:               #232b36;
+  --spine-muted:                var(--spine-400);
+  --spine-grid: rgba(233, 239, 244, 0.04);
+}
+
+/* -------------------------------------------------------------------------
+   Global type refinements
+   ------------------------------------------------------------------------- */
+body,
+.md-typeset {
+  font-feature-settings: "kern", "liga";
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset h1 { letter-spacing: -0.025em; }
+
+/* Mono eyebrow / labels */
+.spine-eyebrow {
+  font-family: var(--md-code-font), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--spine-muted);
+}
+
+/* Header brand mark sizing */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.5rem;
+  width: auto;
+}
+
+.md-header {
+  box-shadow: 0 1px 0 var(--spine-border);
+}
+
+/* Links get a subtle underline on hover instead of full color shift */
+.md-typeset a {
+  text-decoration-color: var(--spine-300);
+  text-underline-offset: 0.18em;
+}
+
+/* Code blocks & inline code */
+.md-typeset code,
+.md-typeset pre > code {
+  font-feature-settings: "kern";
+  border-radius: 6px;
+}
+
+.md-typeset .highlight,
+.md-typeset pre {
+  border-radius: var(--spine-radius-sm);
+}
+
+/* Tables */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--spine-border);
+  border-radius: var(--spine-radius-sm);
+  overflow: hidden;
+}
+.md-typeset table:not([class]) th {
+  background: var(--md-default-fg-color--lightest);
+  font-weight: 600;
+}
+
+/* Admonitions: monochrome, squared-off */
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: var(--spine-radius-sm);
+  border-left-width: 3px;
+}
+
+/* =========================================================================
+   Landing page  (theme/home.html)
+   ========================================================================= */
+
+.spine-landing {
+  color: var(--md-default-fg-color);
+  overflow: hidden;
+}
+
+.spine-landing a { text-decoration: none; }
+
+.spine-wrap {
+  max-width: 60rem;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+/* ---- Hero ---- */
+.spine-hero {
+  position: relative;
+  padding: clamp(1.75rem, 4.5vw, 3.25rem) 0 clamp(2.5rem, 6vw, 4.5rem);
+  text-align: center;
+  isolation: isolate;
+}
+
+/* faint blueprint grid behind the hero */
+.spine-hero::before {
+  content: "";
+  position: absolute;
+  inset: -10% -10% 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(to right, var(--spine-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--spine-grid) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 0%, transparent 75%);
+          mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 0%, transparent 75%);
+}
+
+.spine-hero__mark {
+  position: relative;
+  width: clamp(64px, 12vw, 96px);
+  aspect-ratio: 1 / 1;
+  margin: 0 auto 1.75rem;
+  color: var(--md-default-fg-color);
+}
+/* Assemble (entrance) and idle (steady) marks are stacked and crossfaded. */
+.spine-hero__mark > div { position: absolute; inset: 0; }
+.spine-hero__mark svg { width: 100%; height: 100%; display: block; }
+
+/* Instant hard cut at 1.5s (assemble's end): the assemble freezes on the canonical
+   mark and the idle begins on that exact same frame, so there is no fade or pop. */
+.spine-mark-enter { opacity: 1; animation: sp-mark-out 1ms linear 1.5s forwards; }
+.spine-mark-live  { opacity: 0; animation: sp-mark-in  1ms linear 1.5s forwards; }
+@keyframes sp-mark-out { to { opacity: 0; visibility: hidden; } }
+@keyframes sp-mark-in  { to { opacity: 1; } }
+
+/* Skip the entrance for reduced-motion users; show the steady mark immediately. */
+@media (prefers-reduced-motion: reduce) {
+  .spine-mark-enter { display: none; }
+  .spine-mark-live { opacity: 1; animation: none; }
+}
+
+.spine-hero__title {
+  font-size: clamp(2.4rem, 6.4vw, 4.1rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  margin: 0.6rem 0 0;
+}
+.spine-hero__title .spine-accent {
+  color: var(--spine-muted);
+  display: block;
+}
+
+.spine-hero__sub {
+  max-width: 34rem;
+  margin: 1.5rem auto 0;
+  font-size: clamp(1rem, 2.2vw, 1.2rem);
+  line-height: 1.6;
+  color: var(--md-default-fg-color--light);
+}
+
+.spine-hero__eyebrow { margin-bottom: 0.5rem; display: block; }
+
+/* ---- Buttons ---- */
+.spine-cta {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 2rem;
+}
+
+.spine-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.72rem 1.35rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  border: 1px solid transparent;
+  transition: transform 0.12s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  will-change: transform;
+}
+.spine-btn:hover { transform: translateY(-2px); }
+
+.spine-btn--primary {
+  background: var(--md-default-fg-color);
+  color: var(--md-default-bg-color);
+  box-shadow: 0 8px 24px -12px rgba(11, 14, 21, 0.6);
+}
+.spine-btn--primary:hover { box-shadow: 0 12px 28px -12px rgba(11, 14, 21, 0.65); }
+
+.spine-btn--ghost {
+  border-color: var(--spine-border);
+  color: var(--md-default-fg-color);
+  background: var(--spine-surface);
+}
+.spine-btn--ghost:hover { border-color: var(--spine-400); }
+
+.spine-btn svg { width: 1.05em; height: 1.05em; fill: currentColor; }
+
+/* ---- Install line ---- */
+.spine-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding: 0.55rem 0.6rem 0.55rem 1rem;
+  border: 1px solid var(--spine-border);
+  border-radius: 999px;
+  background: var(--spine-surface);
+  font-family: var(--md-code-font), monospace;
+  font-size: 0.82rem;
+  color: var(--md-default-fg-color--light);
+}
+.spine-install .spine-prompt { color: var(--spine-muted); }
+.spine-install code { background: none; padding: 0; color: var(--md-default-fg-color); }
+.spine-copy {
+  border: 0;
+  background: var(--md-default-fg-color--lightest);
+  color: var(--md-default-fg-color--light);
+  border-radius: 999px;
+  width: 1.7rem; height: 1.7rem;
+  cursor: pointer;
+  display: inline-grid; place-items: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.spine-copy:hover { background: var(--md-default-fg-color); color: var(--md-default-bg-color); }
+.spine-copy svg { width: 0.85rem; height: 0.85rem; fill: currentColor; }
+
+/* ---- Section scaffolding ---- */
+.spine-section { padding: clamp(3rem, 7vw, 5rem) 0; }
+.spine-section--tint { background: var(--spine-surface); border-block: 1px solid var(--spine-border); }
+
+.spine-section__head { max-width: 40rem; margin-bottom: 2.5rem; }
+.spine-section--center .spine-section__head { margin-inline: auto; text-align: center; }
+.spine-section__title {
+  font-size: clamp(1.6rem, 3.6vw, 2.3rem);
+  letter-spacing: -0.025em;
+  font-weight: 600;
+  margin: 0.5rem 0 0;
+  line-height: 1.1;
+}
+.spine-section__lead {
+  margin-top: 0.9rem;
+  color: var(--md-default-fg-color--light);
+  font-size: 1.02rem;
+  line-height: 1.6;
+}
+
+/* ---- Problem -> Spine (before/after) ---- */
+.spine-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.spine-panel {
+  border: 1px solid var(--spine-border);
+  border-radius: var(--spine-radius);
+  padding: 1.5rem;
+  background: var(--md-default-bg-color);
+}
+.spine-panel--muted { background: transparent; }
+.spine-panel h3 {
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: var(--md-code-font), monospace;
+  color: var(--spine-muted);
+  margin: 0 0 1rem;
+  font-weight: 500;
+}
+.spine-list { list-style: none; margin: 0; padding: 0; }
+.spine-list li {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--md-default-fg-color--light);
+  border-top: 1px solid var(--spine-border);
+}
+.spine-list li:first-child { border-top: 0; }
+.spine-list .spine-glyph {
+  flex: none;
+  color: var(--spine-muted);
+  font-family: var(--md-code-font), monospace;
+}
+.spine-panel--after .spine-list li { color: var(--md-default-fg-color); }
+.spine-panel--after .spine-glyph { color: var(--md-default-fg-color); }
+
+/* ---- Feature grid ---- */
+.spine-features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+.spine-feature {
+  border: 1px solid var(--spine-border);
+  border-radius: var(--spine-radius);
+  padding: 1.5rem;
+  background: var(--md-default-bg-color);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.spine-feature:hover { border-color: var(--spine-400); transform: translateY(-3px); }
+.spine-feature__icon {
+  width: 2.1rem; height: 2.1rem;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: var(--md-default-fg-color--lightest);
+  color: var(--md-default-fg-color);
+  margin-bottom: 1rem;
+}
+.spine-feature__icon svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.spine-feature h3 { font-size: 1rem; margin: 0 0 0.4rem; font-weight: 600; letter-spacing: -0.01em; }
+.spine-feature p { margin: 0; font-size: 0.9rem; line-height: 1.55; color: var(--md-default-fg-color--light); }
+
+/* ---- Code showcase ---- */
+.spine-showcase {
+  display: grid;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 2.5rem;
+  align-items: center;
+}
+.spine-code {
+  border: 1px solid var(--spine-border);
+  border-radius: var(--spine-radius);
+  background: var(--spine-ink);
+  overflow: hidden;
+  box-shadow: 0 24px 60px -30px rgba(11, 14, 21, 0.55);
+}
+.spine-code__bar {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid #232b36;
+  background: #0f131b;
+}
+.spine-code__dot { width: 0.6rem; height: 0.6rem; border-radius: 999px; background: #2e3742; }
+.spine-code__name {
+  margin-left: 0.5rem;
+  font-family: var(--md-code-font), monospace;
+  font-size: 0.74rem;
+  color: var(--spine-400);
+}
+.spine-code pre {
+  margin: 0;
+  padding: 1.15rem 1.25rem;
+  overflow-x: auto;
+  font-family: var(--md-code-font), monospace;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: var(--spine-300);
+}
+.spine-code .c-key { color: var(--spine-ice); }
+.spine-code .c-str { color: #9fb4c7; }
+.spine-code .c-num { color: #c3d0dc; }
+.spine-code .c-cmt { color: var(--spine-500); font-style: italic; }
+.spine-code .c-dash { color: var(--spine-500); }
+
+/* ---- Steps ---- */
+.spine-steps { counter-reset: step; display: grid; gap: 1.25rem; }
+.spine-step { display: flex; gap: 1rem; align-items: flex-start; }
+.spine-step__num {
+  counter-increment: step;
+  flex: none;
+  width: 2rem; height: 2rem;
+  border: 1px solid var(--spine-border);
+  border-radius: 999px;
+  display: grid; place-items: center;
+  font-family: var(--md-code-font), monospace;
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color);
+}
+.spine-step__num::before { content: counter(step, decimal-leading-zero); }
+.spine-step h3 { margin: 0.15rem 0 0.25rem; font-size: 1rem; font-weight: 600; }
+.spine-step p { margin: 0; font-size: 0.9rem; color: var(--md-default-fg-color--light); line-height: 1.55; }
+
+/* ---- Final CTA ---- */
+.spine-final {
+  text-align: center;
+  border: 1px solid var(--spine-border);
+  border-radius: var(--spine-radius);
+  padding: clamp(2.5rem, 6vw, 4rem) 1.5rem;
+  background:
+    radial-gradient(ellipse 60% 100% at 50% 0%, var(--md-default-fg-color--lightest), transparent 70%),
+    var(--spine-surface);
+}
+.spine-final h2 {
+  font-size: clamp(1.7rem, 4vw, 2.5rem);
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  margin: 0.5rem 0 0;
+}
+.spine-final p { color: var(--md-default-fg-color--light); margin: 1rem auto 0; max-width: 32rem; }
+
+/* ---- Responsive ---- */
+@media (max-width: 55rem) {
+  .spine-features { grid-template-columns: 1fr 1fr; }
+  .spine-showcase { grid-template-columns: 1fr; }
+}
+@media (max-width: 40rem) {
+  .spine-features { grid-template-columns: 1fr; }
+  .spine-split { grid-template-columns: 1fr; }
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .spine-btn, .spine-feature { transition: none; }
+  .spine-btn:hover, .spine-feature:hover { transform: none; }
+}

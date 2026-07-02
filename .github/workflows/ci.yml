@@ -61,6 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-impacting: ${{ steps.filter.outputs.docker-impacting }}
+      docs-impacting: ${{ steps.filter.outputs.docs-impacting }}
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +76,35 @@ jobs:
               - 'docker/**'
               - 'requirements*.txt'
               - 'src/**'
+            docs-impacting:
+              - 'docs/**'
+              - 'mkdocs.yml'
+              - 'theme/**'
+              - '.github/workflows/pages.yml'
+              - 'pyproject.toml'
+              - 'uv.lock'
+
+  docs:
+    needs: change-diff
+    if: github.event_name == 'pull_request' && needs.change-diff.outputs.docs-impacting == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # Only the docs toolchain — not the ingestion runtime (pyspark, pandas, …),
+      # which MkDocs never imports. --no-sync keeps `uv run` from re-adding it.
+      - name: Install docs dependencies
+        run: uv sync --frozen --only-group docs
+
+      # Strict mode fails the build on broken internal links or missing anchors,
+      # so a PR cannot merge a doc that would break the published site.
+      - name: Validate docs build (strict)
+        run: uv run --no-sync mkdocs build --strict
 
   build:
     needs: [lint, test, change-diff]

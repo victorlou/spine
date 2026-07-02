@@ -1872,15 +1872,25 @@ class DynamicHandler(BaseHandler):
             resource_meta: Resource metadata
         """
         self._current_value_resolver = get_resolver(self.redis_context)
-        # Resolve resource-level headers merged with source defaults before the fetch
-        if resource_config.headers or source_config.headers:
-            headers_to_resolve = {
+        # Resolve resource-level headers merged with source defaults before the fetch.
+        # Cache the ORIGINAL (unresolved) templates the first time we see this
+        # resource, then always resolve from that snapshot. Resolving overwrites
+        # resource_config.headers with concrete values, so without this snapshot the
+        # second batch would re-merge the already-resolved headers and reuse the first
+        # batch's frozen now_ms()/rsa_sign output -- causing time-limited auth
+        # signatures (e.g. Walmart WM_SEC) to expire partway through a multi-batch run.
+        if not hasattr(self, "_original_header_templates"):
+            self._original_header_templates = {}
+        header_cache_key = f"{resource_meta.source_name}.{resource_meta.resource_name}"
+        if header_cache_key not in self._original_header_templates:
+            self._original_header_templates[header_cache_key] = {
                 **(source_config.headers or {}),
                 **(resource_config.headers or {}),
             }
-
+        header_templates = self._original_header_templates[header_cache_key]
+        if header_templates:
             resolved_resource_headers = self._resolve_resource_header_values(
-                headers_to_resolve,
+                header_templates,
                 source_name=resource_meta.source_name,
                 resource_name=resource_meta.resource_name,
             )
